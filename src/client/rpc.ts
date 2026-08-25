@@ -21,6 +21,8 @@ import type {
 export interface RpcTarget {
   /** Base URL of the DSH web server, e.g. http://127.0.0.1:3080 (no trailing slash). */
   baseUrl: string
+  /** Extra headers on every /api request (e.g. Cloudflare Access service token or a session cookie). */
+  extraHeaders?: Record<string, string>
 }
 
 export class RpcErrorResult extends Error {
@@ -50,9 +52,11 @@ export function normalizeBaseUrl(raw: string): string {
 
 export class DshRpcClient {
   private readonly baseUrl: string
+  private readonly extraHeaders: Record<string, string>
 
-  constructor(baseUrl: string) {
+  constructor(baseUrl: string, extraHeaders: Record<string, string> = {}) {
     this.baseUrl = normalizeBaseUrl(baseUrl)
+    this.extraHeaders = extraHeaders
   }
 
   get url(): string {
@@ -75,7 +79,7 @@ export class DshRpcClient {
     try {
       response = await fetch(`${this.baseUrl}/api/${method}`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...this.extraHeaders },
         body: JSON.stringify(message),
         signal,
       })
@@ -85,7 +89,7 @@ export class DshRpcClient {
     }
     if (!response.ok) {
       throw new DshTransportError(
-        `DSH RPC ${method} 传输失败：HTTP ${response.status} ${response.statusText}`,
+        `DSH RPC ${method} 传输失败：HTTP ${response.status}${response.redirected ? '（发生了重定向，可能被访问控制/反代拦截）' : ''}`,
         response.status,
       )
     }
@@ -93,7 +97,11 @@ export class DshRpcClient {
     try {
       envelope = (await response.json()) as ServerResponse
     } catch {
-      throw new DshTransportError(`DSH RPC ${method} 响应不是合法 JSON`)
+      const contentType = response.headers.get('content-type') ?? ''
+      const hint = contentType.includes('html')
+        ? '返回了 HTML（很可能被反向代理 / Cloudflare Access 等访问控制拦截，未放行 /api）'
+        : '响应不是合法 JSON'
+      throw new DshTransportError(`DSH RPC ${method} ${hint}`)
     }
     if (envelope.type !== 'server-response' || envelope.rpcId !== rpcId) {
       throw new DshTransportError(`DSH RPC ${method} 响应 rpcId 不匹配或格式错误`)
@@ -115,7 +123,7 @@ export class DshRpcClient {
     try {
       response = await fetch(`${this.baseUrl}/api/respond`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...this.extraHeaders },
         body: JSON.stringify(message),
       })
     } catch (error) {

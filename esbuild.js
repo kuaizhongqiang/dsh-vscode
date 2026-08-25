@@ -14,7 +14,7 @@ const options = {
   platform: 'node',
   target: 'node20',
   format: 'cjs',
-  external: ['vscode'],
+  external: ['vscode', 'bufferutil', 'utf-8-validate'],
   sourcemap: true,
   logLevel: 'info',
 }

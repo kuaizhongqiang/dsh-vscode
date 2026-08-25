@@ -34,6 +34,35 @@ describe('DshRpcClient.call', () => {
     expect(value.items).toEqual([])
   })
 
+  it('sends extra headers on every request (e.g. Cloudflare Access auth)', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = init?.headers as Record<string, string>
+      expect(headers['CF-Access-Client-Id']).toBe('service-id')
+      expect(headers['CF-Access-Client-Secret']).toBe('service-secret')
+      expect(headers['content-type']).toBe('application/json')
+      const body = JSON.parse(String(init?.body))
+      return jsonResponse({ type: 'server-response', rpcId: body.rpcId, result: { ok: true, value: null } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new DshRpcClient('http://127.0.0.1:3080', {
+      'CF-Access-Client-Id': 'service-id',
+      'CF-Access-Client-Secret': 'service-secret',
+    })
+    await client.call('session.list', {})
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('throws a clear error when a redirect lands on an HTML page', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response('<html><head><title>302 Found</title></head><body>cloudflare</body></html>', {
+        status: 200,
+        headers: { 'content-type': 'text/html; charset=UTF-8' },
+      }))
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new DshRpcClient('http://127.0.0.1:3080')
+    await expect(client.call('session.list', {})).rejects.toThrow(/HTML/)
+  })
+
   it('throws RpcErrorResult on ok:false', async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body))

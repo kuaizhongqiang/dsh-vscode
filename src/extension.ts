@@ -101,6 +101,7 @@ class DshExtension {
     try {
       const connection = new DshConnection(this.config.serverUrl, {
         reconnectIntervalMs: this.config.reconnectIntervalMs,
+        extraHeaders: this.config.extraHeaders,
       })
       const off = connection.onEvent((event) => this.handleConnectionEvent(event))
       this.disposables.push({ dispose: off })
@@ -179,9 +180,12 @@ class DshExtension {
   private handleConfigChanged(): void {
     const next = readConfig()
     const serverChanged = next.serverUrl !== this.config.serverUrl
+    const headersChanged = JSON.stringify(next.extraHeaders) !== JSON.stringify(this.config.extraHeaders)
     this.config = next
-    if (serverChanged) {
-      this.output.appendLine(`[dsh-vscode] serverUrl 变更为 ${next.serverUrl}，重新连接`)
+    if (serverChanged || headersChanged) {
+      this.output.appendLine(
+        `[dsh-vscode] 连接配置变更${serverChanged ? `（serverUrl → ${next.serverUrl}）` : '（extraHeaders）'}，重新连接`,
+      )
       this.disconnect()
       void this.connect()
     }

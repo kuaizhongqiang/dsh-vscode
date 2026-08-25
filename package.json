@@ -2,7 +2,7 @@
   "name": "dsh-vscode",
   "displayName": "DSH - DeepSeek Harness",
   "description": "在 VSCode 中连接 DeepSeek Harness（DSH）实例：会话列表、流式聊天、工具调用、审批与提问处理。",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "publisher": "kuaizhongqiang",
   "license": "MIT",
   "icon": "media/dsh-icon.png",
@@ -84,6 +84,14 @@
           "minimum": 200,
           "maximum": 100000,
           "description": "工具调用结果在聊天面板中的最大展示字符数（超出截断）。"
+        },
+        "dsh.extraHeaders": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "附加到每个 /api 请求和事件流 WebSocket 握手头的自定义请求头。远程部署在 Cloudflare Access 等访问控制后面时，可填 CF-Access-Client-Id / CF-Access-Client-Secret（服务令牌）或 Cookie: CF_Authorization=...（浏览器会话）。"
         }
       }
     },
@@ -233,9 +241,13 @@
   "devDependencies": {
     "@types/node": "^22.20.1",
     "@types/vscode": "^1.90.0",
+    "@types/ws": "^8.18.1",
     "@vscode/vsce": "^3.0.0",
     "esbuild": "^0.24.0",
     "typescript": "^5.6.0",
     "vitest": "^3.0.0"
+  },
+  "dependencies": {
+    "ws": "^8.21.3"
   }
 }

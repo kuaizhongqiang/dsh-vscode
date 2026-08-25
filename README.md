@@ -29,6 +29,34 @@
 - VSCode ≥ 1.90（Node ≥ 20）
 - 一个可访问的 DSH 实例（`dsh web` 已启动）。默认连接 `http://127.0.0.1:3080`。
 - 远程访问时，DSH 需用 `--trusted-host <你的域名>` 启动（`/api` 信任围栏），否则 /api 会返回 403。
+- 如果远程域名在 **Cloudflare Access**（Zero Trust）等访问控制后面，`/api` 请求会被 302 重定向到登录页，
+  需要在设置 `dsh.extraHeaders` 里配置认证头（见下文）。
+
+### 远程访问（Cloudflare Access 等访问控制）
+
+DSH 的 Web 端能访问是因为浏览器持有 `CF_Authorization` 会话 cookie，而扩展是无 cookie 的机器客户端。
+两种解决办法（配置到 `dsh.extraHeaders`，改完会自动重连）：
+
+**方式 A：Cloudflare Access 服务令牌（推荐）**
+1. Cloudflare Zero Trust → Access → Service Auth → 创建 Service Token，得到 Client ID 与 Client Secret。
+2. Access → Applications → dsh 应用 → 策略中把该 Service Token 加入允许身份（或新建一条仅限该令牌的策略）。
+3. 扩展设置：
+   ```json
+   "dsh.extraHeaders": {
+     "CF-Access-Client-Id": "<你的 Client ID>",
+     "CF-Access-Client-Secret": "<你的 Client Secret>"
+   }
+   ```
+
+**方式 B：浏览器会话 Cookie（快速验证用）**
+1. 在浏览器登录 `https://dsh.kuai-private.top`，DevTools → Application → Cookies 里复制 `CF_Authorization` 的值。
+2. 扩展设置：
+   ```json
+   "dsh.extraHeaders": { "Cookie": "CF_Authorization=<复制的值>" }
+   ```
+   Cookie 过期后需重新复制更新。
+
+配置后：RPC（列表/历史/发送/审批）与事件流 WebSocket 握手都会带上这些头。
 
 ## 安装
 
@@ -63,6 +91,7 @@ code --install-extension dsh-vscode-0.0.0.vsix
 | `dsh.autoOpenChat` | `true` | 新建会话后自动打开聊天面板 |
 | `dsh.showReasoning` | `true` | 是否显示模型的思考过程（reasoning）折叠块 |
 | `dsh.maxToolResultChars` | `4000` | 工具调用结果在面板中的最大展示字符数 |
+| `dsh.extraHeaders` | `{}` | 附加到每个 `/api` 请求与事件流 WebSocket 握手头的自定义请求头（见下方「远程访问（Cloudflare Access 等）」） |
 
 ## 命令
 

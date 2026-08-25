@@ -5,8 +5,13 @@
  * (session/event, session/subscribed, session/projection, approval/requested,
  * question/requested, session/jobs, …). This client reconnects with backoff
  * and dispatches parsed frames to listeners.
+ *
+ * Uses the `ws` package (not the Node global WebSocket) so the handshake can
+ * carry extra headers — required behind Cloudflare Access / reverse proxies
+ * that authenticate API traffic (service token or session cookie).
  */
 
+import WebSocket from 'ws'
 import type { MuxFrame, ServerRequest } from './types.ts'
 
 export interface MuxStreamCallbacks {
@@ -18,6 +23,8 @@ export interface MuxStreamCallbacks {
 
 export interface MuxStreamOptions {
   baseUrl: string
+  /** Extra headers for the WebSocket handshake (e.g. Cloudflare Access auth). */
+  extraHeaders?: Record<string, string>
   /** Reconnect interval after an unexpected close (ms). */
   reconnectIntervalMs?: number
   /** Max consecutive reconnect attempts before giving up (0 = unlimited). */
@@ -28,6 +35,7 @@ const SOCKET_CLOSED_BY_US = 4000
 
 export class MuxStreamClient {
   private readonly baseUrl: string
+  private readonly extraHeaders: Record<string, string>
   private readonly reconnectIntervalMs: number
   private readonly maxReconnects: number
   private readonly callbacks: MuxStreamCallbacks
@@ -39,6 +47,7 @@ export class MuxStreamClient {
 
   constructor(options: MuxStreamOptions, callbacks: MuxStreamCallbacks = {}) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '')
+    this.extraHeaders = options.extraHeaders ?? {}
     this.reconnectIntervalMs = options.reconnectIntervalMs ?? 3000
     this.maxReconnects = options.maxReconnects ?? 0
     this.callbacks = callbacks
@@ -78,23 +87,23 @@ export class MuxStreamClient {
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
     let socket: WebSocket
     try {
-      socket = new WebSocket(url)
+      socket = new WebSocket(url, { headers: this.extraHeaders })
     } catch (error) {
       this.emitError(error)
       return
     }
     this.socket = socket
 
-    socket.addEventListener('open', () => {
+    socket.on('open', () => {
       this.reconnectAttempts = 0
       this.callbacks.onOpen?.()
     })
 
-    socket.addEventListener('message', (event: MessageEvent) => {
+    socket.on('message', (data) => {
       let envelope: ServerRequest
       try {
-        if (typeof event.data !== 'string') return
-        envelope = JSON.parse(event.data) as ServerRequest
+        const raw = typeof data === 'string' ? data : data.toString()
+        envelope = JSON.parse(raw) as ServerRequest
       } catch {
         return // malformed frame — drop
       }
@@ -102,14 +111,15 @@ export class MuxStreamClient {
       this.callbacks.onFrame?.(envelope.rpcId, envelope.payload as MuxFrame)
     })
 
-    socket.addEventListener('close', (event: CloseEvent) => {
+    socket.on('close', (code, reason) => {
       if (this.socket === socket) this.socket = undefined
-      this.callbacks.onClose?.(event.reason || `code ${event.code}`)
+      this.callbacks.onClose?.(reason.toString() || `code ${code}`)
       if (!this.closedByUs && !this.aborted) this.scheduleReconnect()
     })
 
-    socket.addEventListener('error', () => {
+    socket.on('error', (error) => {
       // 'close' always follows 'error'; the close handler owns recovery.
+      this.emitError(error)
     })
   }
 

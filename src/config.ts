@@ -9,6 +9,7 @@ const RECONNECT_INTERVAL = 'dsh.reconnectIntervalMs'
 const AUTO_OPEN_CHAT = 'dsh.autoOpenChat'
 const SHOW_REASONING = 'dsh.showReasoning'
 const MAX_TOOL_RESULT_CHARS = 'dsh.maxToolResultChars'
+const EXTRA_HEADERS = 'dsh.extraHeaders'
 
 export interface DshConfig {
   serverUrl: string
@@ -20,6 +21,8 @@ export interface DshConfig {
   autoOpenChat: boolean
   showReasoning: boolean
   maxToolResultChars: number
+  /** 附加到每个 /api 请求与 mux WebSocket 握手头的自定义请求头（如 Cloudflare Access 认证）。 */
+  extraHeaders: Record<string, string>
 }
 
 function key(full: string): string {
@@ -38,7 +41,19 @@ export function readConfig(): DshConfig {
     autoOpenChat: config.get<boolean>(key(AUTO_OPEN_CHAT), true),
     showReasoning: config.get<boolean>(key(SHOW_REASONING), true),
     maxToolResultChars: config.get<number>(key(MAX_TOOL_RESULT_CHARS), 4000),
+    extraHeaders: readExtraHeaders(config),
   }
+}
+
+function readExtraHeaders(config: vscode.WorkspaceConfiguration): Record<string, string> {
+  const raw = config.get<Record<string, string>>(key(EXTRA_HEADERS), {})
+  const out: Record<string, string> = {}
+  for (const [name, value] of Object.entries(raw)) {
+    if (typeof value === 'string' && value.length > 0 && name.trim().length > 0) {
+      out[name.trim()] = value
+    }
+  }
+  return out
 }
 
 export function onConfigChanged(listener: () => void): vscode.Disposable {

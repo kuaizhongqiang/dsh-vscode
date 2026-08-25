@@ -37,6 +37,8 @@ export type DshEvent =
 
 export interface DshConnectionOptions {
   reconnectIntervalMs?: number
+  /** Extra headers on every /api request and the mux WebSocket handshake (e.g. Cloudflare Access auth). */
+  extraHeaders?: Record<string, string>
 }
 
 export type DshEventListener = (event: DshEvent) => void
@@ -46,10 +48,12 @@ export class DshConnection {
   private mux: MuxStreamClient | undefined
   private listeners = new Set<DshEventListener>()
   private reconnectIntervalMs: number
+  private readonly extraHeaders: Record<string, string>
 
   constructor(baseUrl: string, options: DshConnectionOptions = {}) {
-    this.rpc = new DshRpcClient(baseUrl)
     this.reconnectIntervalMs = options.reconnectIntervalMs ?? 3000
+    this.extraHeaders = options.extraHeaders ?? {}
+    this.rpc = new DshRpcClient(baseUrl, this.extraHeaders)
   }
 
   get baseUrl(): string {
@@ -75,7 +79,11 @@ export class DshConnection {
     await this.rpc.call<unknown>('host.describe', {})
     if (this.mux === undefined) {
       this.mux = new MuxStreamClient(
-        { baseUrl: this.rpc.url, reconnectIntervalMs: this.reconnectIntervalMs },
+        {
+          baseUrl: this.rpc.url,
+          reconnectIntervalMs: this.reconnectIntervalMs,
+          extraHeaders: this.extraHeaders,
+        },
         {
           onOpen: () => this.emit({ kind: 'connected', baseUrl: this.rpc.url }),
           onClose: (reason) => this.emit({ kind: 'disconnected', reason }),
