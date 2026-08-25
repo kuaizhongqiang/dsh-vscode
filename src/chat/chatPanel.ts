@@ -138,6 +138,14 @@ export class ChatPanel {
   private handleConnectionEvent(event: DshEvent): void {
     if (!('sessionId' in event) || event.sessionId !== this.sessionId) return
     switch (event.kind) {
+      case 'projection':
+        if (event.key === 'title' && typeof event.value === 'string' && event.value !== this.title) {
+          this.title = event.value
+          this.panel.title = event.value
+          this.postOp({ type: 'title', title: event.value })
+          this.context.onTitleChanged?.(event.value)
+        }
+        break
       case 'approval-requested':
         this.postOp({
           type: 'approval',
