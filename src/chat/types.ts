@@ -3,7 +3,7 @@
  * the chat webview. Ops flow host → webview; requests flow webview → host.
  */
 
-import type { QuestionItem } from '../client/types.ts'
+import type { QuestionItem, SessionModels } from '../client/types.ts'
 
 export interface RenderToolCall {
   callId: string
@@ -29,7 +29,9 @@ export interface RenderMessage {
 }
 
 export type HostToWebviewOp =
-  | { type: 'init'; sessionId: string; title?: string; cwd?: string; running: boolean; messages: RenderMessage[] }
+  | { type: 'init'; sessionId: string; title?: string; cwd?: string; running: boolean; messages: RenderMessage[]; showReasoning: boolean }
+  | { type: 'connection'; connected: boolean }
+  | { type: 'models'; current: { provider: string; model: string; reasoningEffort?: string } | null; routable: boolean; groups: SessionModels['groups']; failures: SessionModels['failures'] }
   | { type: 'append-message'; message: RenderMessage }
   | { type: 'stream-text'; id: string; text: string }
   | { type: 'stream-reasoning'; id: string; text: string }
@@ -52,7 +54,8 @@ export type WebviewToHostRequest =
   | { type: 'approve'; rpcId: string; approvalId: string }
   | { type: 'reject'; rpcId: string; approvalId: string }
   | { type: 'answer'; rpcId: string; answers: { id: string; selected: string[]; custom?: string }[] }
+  | { type: 'model-change'; provider: string; model: string }
   | { type: 'open-in-browser' }
 
-/** Truncate long tool results before shipping to the webview. */
+/** Default truncation cap for tool results before shipping to the webview. */
 export const MAX_TOOL_RESULT_CHARS = 4000

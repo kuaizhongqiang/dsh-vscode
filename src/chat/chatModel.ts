@@ -21,6 +21,8 @@ export interface ChatModelOptions {
   connection: DshConnection
   sessionId: SessionId
   onOp: (op: HostToWebviewOp) => void
+  /** Tool-result truncation cap before shipping to the webview (default 4000). */
+  maxToolResultChars?: number
 }
 
 interface StreamingState {
@@ -40,6 +42,7 @@ export class ChatModel {
   private readonly connection: DshConnection
   private readonly sessionId: SessionId
   private readonly onOp: (op: HostToWebviewOp) => void
+  private readonly maxToolResultChars: number
   private readonly messages: RenderMessage[] = []
   private readonly toolCalls = new Map<string, RenderToolCall>()
   private maxSeq = 0
@@ -53,6 +56,7 @@ export class ChatModel {
     this.connection = options.connection
     this.sessionId = options.sessionId
     this.onOp = options.onOp
+    this.maxToolResultChars = options.maxToolResultChars ?? MAX_TOOL_RESULT_CHARS
     // Subscribe to live events first so nothing falls into the history/live gap.
     this.offConnection = this.connection.onEvent((event) => {
       if (event.kind !== 'session-event' || event.sessionId !== this.sessionId) return
@@ -283,8 +287,8 @@ export class ChatModel {
     const existing = this.toolCalls.get(callId)
     const isError = data.error !== undefined || data.message.isError === true
     const raw = extractText(data.message.content)
-    const result = raw.length > MAX_TOOL_RESULT_CHARS
-      ? `${raw.slice(0, MAX_TOOL_RESULT_CHARS)}\n…（结果过长已截断）`
+    const result = raw.length > this.maxToolResultChars
+      ? `${raw.slice(0, this.maxToolResultChars)}\n…（结果过长已截断）`
       : raw
     this.toolCalls.set(callId, {
       callId,

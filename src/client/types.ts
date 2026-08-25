@@ -338,3 +338,31 @@ export interface WorkspaceView {
   createdAt: string
   updatedAt: string
 }
+
+// ---- Models & presets ----
+
+export interface ModelCatalogModel {
+  id: string
+  name: string
+  description?: string
+  reasoning?: unknown
+}
+
+export interface ModelProviderGroup {
+  id: string
+  name: string
+  models: ModelCatalogModel[]
+}
+
+export interface SessionModels {
+  current: { provider: string; model: string; reasoningEffort?: string }
+  routable: boolean
+  groups: ModelProviderGroup[]
+  failures: { id: string; name: string; message: string }[]
+}
+
+export interface AgentPresetEntry {
+  id: string
+  trust: 'system' | 'user'
+  isDefault: boolean
+}

@@ -40,8 +40,23 @@ async function main(): Promise<void> {
     } catch (error) {
       check('session.history', false, String(error))
     }
+    try {
+      const models = await connection.models(sid)
+      check('session.models', typeof models.routable === 'boolean' && Array.isArray(models.groups),
+        `routable=${models.routable}, ${models.groups.length} 组`)
+    } catch (error) {
+      check('session.models', false, String(error))
+    }
   } else {
     check('session.history', false, '无会话可测')
+  }
+
+  // 3b. agent preset catalog (read-only)
+  try {
+    const presets = await connection.listPresets()
+    check('agentPreset.list', Array.isArray(presets), `${presets.length} 个 preset`)
+  } catch (error) {
+    check('agentPreset.list', false, String(error))
   }
 
   // 4. Mux stream: connect, expect session/event or projection frames within 6s

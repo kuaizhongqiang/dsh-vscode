@@ -15,10 +15,12 @@
 - **会话侧边栏**：按工作区（workspace）分组展示会话，运行中/轮次一目了然；支持新建、重命名、停止、在浏览器打开。
 - **聊天面板**（Webview）：
   - 历史消息加载 + 实时流式输出（文本 / 思考过程分开展示，带打字光标）
+  - **模型选择器**：面板头部直接切换会话使用的模型（provider/model）
   - 工具调用卡片：参数、执行状态、结果（错误标红），可折叠
   - **审批横幅**：工具请求执行时直接在面板「允许一次 / 拒绝」
   - **提问表单**：Agent 提问时以选项/多选/自由文本作答
   - 停止当前回合、一键在浏览器打开同一会话
+- **新建会话引导**：有多个 agent preset / 工作区时弹出选择，新会话可用不同 preset 与目录
 - **工作区自动关联**：打开文件夹时自动在 DSH 创建/关联同名工作区，新会话默认在该目录工作。
 - 会话标题 / 运行状态通过 mux 投影实时同步。
 
@@ -58,6 +60,9 @@ code --install-extension dsh-vscode-0.0.0.vsix
 | `dsh.defaultAgentPreset` | `standard` | 新建会话的 agent preset（不存在时回退到服务端默认） |
 | `dsh.historyPageSize` | `40` | 打开会话时加载的 message 数量 |
 | `dsh.reconnectIntervalMs` | `3000` | 事件流重连间隔 |
+| `dsh.autoOpenChat` | `true` | 新建会话后自动打开聊天面板 |
+| `dsh.showReasoning` | `true` | 是否显示模型的思考过程（reasoning）折叠块 |
+| `dsh.maxToolResultChars` | `4000` | 工具调用结果在面板中的最大展示字符数 |
 
 ## 命令
 

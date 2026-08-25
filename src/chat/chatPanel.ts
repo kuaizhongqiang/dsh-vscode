@@ -20,6 +20,8 @@ export interface ChatPanelContext {
   cwd?: string
   running: boolean
   historyPageSize: number
+  showReasoning: boolean
+  maxToolResultChars: number
   onTitleChanged?: (title: string) => void
   onStateChanged?: () => void
 }
@@ -74,6 +76,7 @@ export class ChatPanel {
       connection: context.connection,
       sessionId: context.sessionId,
       onOp: (op) => this.postOp(op),
+      maxToolResultChars: context.maxToolResultChars,
     })
 
     const offConnection = context.connection.onEvent((event) => this.handleConnectionEvent(event))
@@ -136,6 +139,11 @@ export class ChatPanel {
   // ---- connection events for this session (approvals/questions) ----
 
   private handleConnectionEvent(event: DshEvent): void {
+    // Global connection-state changes gate the input box.
+    if (event.kind === 'connected' || event.kind === 'disconnected') {
+      this.postOp({ type: 'connection', connected: event.kind === 'connected' })
+      return
+    }
     if (!('sessionId' in event) || event.sessionId !== this.sessionId) return
     switch (event.kind) {
       case 'projection':
@@ -180,6 +188,7 @@ export class ChatPanel {
     switch (message.type) {
       case 'ready':
         this.webviewReady = true
+        this.postOp({ type: 'connection', connected: this.context.connection.connected })
         this.postOp({
           type: 'init',
           sessionId: this.sessionId,
@@ -187,8 +196,10 @@ export class ChatPanel {
           cwd: this.context.cwd,
           running: this.running,
           messages: this.model.snapshot(),
+          showReasoning: this.context.showReasoning,
         })
         this.flushPending()
+        void this.loadModels()
         break
       case 'prompt':
         void this.sendPrompt(message.text)
@@ -197,6 +208,9 @@ export class ChatPanel {
         void this.context.connection.cancel(this.sessionId).catch((error) => {
           this.postOp({ type: 'error', text: `停止失败：${errorMessage(error)}` })
         })
+        break
+      case 'model-change':
+        void this.selectModel(message.provider, message.model)
         break
       case 'approve':
         void this.context.connection.approve(message.rpcId, this.sessionId, message.approvalId).catch((error) => {
@@ -224,6 +238,31 @@ export class ChatPanel {
       await this.context.connection.prompt(this.sessionId, text, 'queue')
     } catch (error) {
       this.postOp({ type: 'error', text: `发送失败：${errorMessage(error)}` })
+    }
+  }
+
+  private async loadModels(): Promise<void> {
+    try {
+      const models = await this.context.connection.models(this.sessionId)
+      this.postOp({
+        type: 'models',
+        current: models.current,
+        routable: models.routable,
+        groups: models.groups,
+        failures: models.failures,
+      })
+    } catch (error) {
+      // Model catalog is advisory; a failure must not block chat.
+      this.postOp({ type: 'status', text: `模型目录加载失败：${errorMessage(error)}` })
+    }
+  }
+
+  private async selectModel(provider: string, model: string): Promise<void> {
+    try {
+      await this.context.connection.selectModel(this.sessionId, provider, model)
+      this.postOp({ type: 'status', text: `已切换模型：${provider}/${model}` })
+    } catch (error) {
+      this.postOp({ type: 'error', text: `切换模型失败：${errorMessage(error)}` })
     }
   }
 

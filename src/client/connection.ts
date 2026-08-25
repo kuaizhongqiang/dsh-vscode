@@ -6,6 +6,7 @@
 import { DshRpcClient } from './rpc.ts'
 import { MuxStreamClient } from './mux.ts'
 import type {
+  AgentPresetEntry,
   ApprovalRequestedFrame,
   ApprovalResolvedFrame,
   HostFrame,
@@ -17,6 +18,7 @@ import type {
   SessionId,
   SessionListEntry,
   SessionListResult,
+  SessionModels,
   WorkspaceView,
 } from './types.ts'
 
@@ -147,6 +149,23 @@ export class DshConnection {
 
   async createWorkspace(path: string): Promise<{ workspace: WorkspaceView; created: boolean }> {
     return this.rpc.call<{ workspace: WorkspaceView; created: boolean }>('workspace.create', { path })
+  }
+
+  // ---- Models ----
+
+  async models(sessionId: SessionId): Promise<SessionModels> {
+    return this.rpc.call<SessionModels>('session.models', { sessionId })
+  }
+
+  async selectModel(sessionId: SessionId, provider: string, model: string): Promise<void> {
+    await this.rpc.call('session.selectModel', { sessionId, provider, model })
+  }
+
+  // ---- Agent presets ----
+
+  async listPresets(): Promise<AgentPresetEntry[]> {
+    const result = await this.rpc.call<{ presets: AgentPresetEntry[] }>('agentPreset.list', {})
+    return result.presets
   }
 
   // ---- Responding to server requests ----

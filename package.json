@@ -2,7 +2,7 @@
   "name": "dsh-vscode",
   "displayName": "DSH - DeepSeek Harness",
   "description": "在 VSCode 中连接 DeepSeek Harness（DSH）实例：会话列表、流式聊天、工具调用、审批与提问处理。",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "publisher": "kuaizhongqiang",
   "license": "MIT",
   "icon": "media/dsh-icon.png",
@@ -67,6 +67,23 @@
           "default": 3000,
           "minimum": 1000,
           "description": "事件流断开后的自动重连间隔（毫秒）。"
+        },
+        "dsh.autoOpenChat": {
+          "type": "boolean",
+          "default": true,
+          "description": "新建会话后自动打开聊天面板。"
+        },
+        "dsh.showReasoning": {
+          "type": "boolean",
+          "default": true,
+          "description": "在聊天面板中显示模型的思考过程（reasoning）折叠块。"
+        },
+        "dsh.maxToolResultChars": {
+          "type": "number",
+          "default": 4000,
+          "minimum": 200,
+          "maximum": 100000,
+          "description": "工具调用结果在聊天面板中的最大展示字符数（超出截断）。"
         }
       }
     },

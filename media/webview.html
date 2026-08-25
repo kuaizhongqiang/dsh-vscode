@@ -46,6 +46,14 @@
     white-space: nowrap;
   }
   header .badge.running { background: rgba(137,209,125,0.15); color: var(--ok); }
+  .model-label { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .model-label select {
+    background: var(--bubble-user); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 4px;
+    font-size: 11px; padding: 1px 4px; max-width: 180px;
+    outline: none;
+  }
+  .model-label select:disabled { opacity: 0.55; }
   header button {
     background: transparent; border: 1px solid var(--border); color: var(--fg);
     border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 12px;
@@ -210,6 +218,11 @@
     <span class="title" id="h-title">DSH 会话</span>
     <span class="cwd" id="h-cwd"></span>
     <span class="badge" id="h-badge">未连接</span>
+    <label class="model-label" title="会话使用的模型">
+      <select id="model-select" disabled>
+        <option value="">加载模型…</option>
+      </select>
+    </label>
     <button id="btn-open-browser" title="在浏览器打开该会话">$(globe) 浏览器</button>
     <button id="btn-cancel" title="停止当前回合" disabled>停止</button>
   </header>
@@ -239,6 +252,12 @@
   var msgEls = {};     // message id -> {el, textEl, reasoningEl}
   var msgTexts = {};   // message id -> accumulated text
   var msgReasoning = {};
+  var connectionOpened = false;  // 与 DSH 的事件流是否连通（决定能否输入）
+  var sessionRunning = false;    // 当前会话是否在跑（仅影响徽章显示）
+  var showReasoning = true;      // 是否显示思考过程
+  var routable = true;           // 会话是否有可用模型路由
+  var modelsLoaded = false;
+  var modelSelect = document.getElementById('model-select');
   var nearBottom = true;
   var lastMessageId = null;
 
@@ -385,9 +404,8 @@
     var accumulated = msgTexts[msg.id] !== undefined ? msgTexts[msg.id] : msg.text;
     textEl.innerHTML = renderMarkdown(accumulated);
     body.appendChild(textEl);
-    if (msg.reasoning) {
+    if (msg.reasoning && showReasoning) {
       var det = el('details', 'reasoning');
-      det.open = msg.streaming ? false : false;
       var sum = el('summary', '', msg.streaming ? '思考中…' : '思考过程');
       var rb = el('div', 'reasoning-body');
       rb.textContent = msgReasoning[msg.id] !== undefined ? msgReasoning[msg.id] : msg.reasoning;
@@ -421,23 +439,81 @@
     statusEl.className = 'status-line' + (isError ? ' error' : '');
   }
 
-  function setConnected(connected, text) {
-    badgeEl.textContent = text;
-    badgeEl.className = 'badge' + (connected ? ' running' : '');
-    inputEl.disabled = !connected;
-    sendBtn.disabled = !connected;
-    cancelBtn.disabled = !connected;
+  function updateBadge() {
+    if (!connectionOpened) {
+      badgeEl.textContent = '未连接';
+      badgeEl.className = 'badge';
+    } else if (sessionRunning) {
+      badgeEl.textContent = '运行中';
+      badgeEl.className = 'badge running';
+    } else {
+      badgeEl.textContent = '已连接';
+      badgeEl.className = 'badge running';
+    }
+  }
+
+  function updateInputState() {
+    var canInput = connectionOpened && routable;
+    inputEl.disabled = !canInput;
+    sendBtn.disabled = !canInput;
+    cancelBtn.disabled = !connectionOpened;
+    inputEl.placeholder = canInput
+      ? '输入消息，Enter 发送，Shift+Enter 换行…'
+      : (connectionOpened ? '当前会话没有可用模型路由，无法发送' : '未连接 DSH，输入不可用');
+    hintEl.textContent = '';
+    if (connectionOpened && !routable) hintEl.textContent = '⚠ 当前会话没有可用模型路由（模型目录加载失败或提供商不可用），请切换模型或稍后重试。';
   }
 
   // ---- ops from the host ----
   function handleOp(op) {
     switch (op.type) {
+      case 'connection': {
+        connectionOpened = op.connected;
+        if (!connectionOpened) sessionRunning = false;
+        updateBadge();
+        updateInputState();
+        break;
+      }
       case 'init': {
         if (op.title) titleEl.textContent = op.title;
         if (op.cwd) cwdEl.textContent = op.cwd;
-        setConnected(op.running, op.running ? '运行中' : '已连接');
+        sessionRunning = op.running;
+        if (op.showReasoning !== undefined) showReasoning = op.showReasoning;
+        updateBadge();
         messagesEl.querySelectorAll('.msg, .tool-card, .approval, .question, .turn-badge').forEach(function (e) { e.remove(); });
         (op.messages || []).forEach(renderMessage);
+        break;
+      }
+      case 'models': {
+        modelsLoaded = true;
+        routable = op.routable;
+        // rebuild the model <select>
+        modelSelect.innerHTML = '';
+        var groups = op.groups || [];
+        if (groups.length === 0) {
+          var opt = document.createElement('option');
+          opt.value = '';
+          opt.textContent = '（无可用模型）';
+          modelSelect.appendChild(opt);
+        }
+        groups.forEach(function (group) {
+          var og = document.createElement('optgroup');
+          og.label = group.name || group.id;
+          (group.models || []).forEach(function (model) {
+            var o = document.createElement('option');
+            o.value = group.id + '\u0001' + model.id;
+            o.textContent = model.name || model.id;
+            if (op.current && op.current.provider === group.id && op.current.model === model.id) o.selected = true;
+            og.appendChild(o);
+          });
+          modelSelect.appendChild(og);
+        });
+        modelSelect.disabled = false;
+        if ((op.failures || []).length > 0) {
+          var failMsg = op.failures.map(function (f) { return f.name + ': ' + f.message; }).join('；');
+          hintEl.textContent = '⚠ 部分模型提供商加载失败：' + failMsg;
+        }
+        updateInputState();
         break;
       }
       case 'append-message':
@@ -451,6 +527,7 @@
         break;
       }
       case 'stream-reasoning': {
+        if (!showReasoning) break;
         msgReasoning[op.id] = (msgReasoning[op.id] || '') + op.text;
         var m2 = msgEls[op.id];
         var det = m2 && m2.el.querySelector('details.reasoning');
@@ -626,6 +703,17 @@
   sendBtn.addEventListener('click', send);
   cancelBtn.addEventListener('click', function () { post({ type: 'cancel' }); });
   document.getElementById('btn-open-browser').addEventListener('click', function () { post({ type: 'open-in-browser' }); });
+  modelSelect.addEventListener('change', function () {
+    var value = modelSelect.value;
+    if (!value) return;
+    var sep = value.indexOf('\u0001');
+    var provider = value.slice(0, sep);
+    var model = value.slice(sep + 1);
+    post({ type: 'model-change', provider: provider, model: model });
+  });
+
+  updateInputState();
+  updateBadge();
 
   window.addEventListener('message', function (event) {
     var msg = event.data;

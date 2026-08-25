@@ -277,6 +277,8 @@ class DshExtension {
       cwd: session?.cwd,
       running: session?.running ?? false,
       historyPageSize: this.config.historyPageSize,
+      showReasoning: this.config.showReasoning,
+      maxToolResultChars: this.config.maxToolResultChars,
       onTitleChanged: (title) => {
         const current = this.store?.getSession(sessionId)
         if (current !== undefined) {
@@ -323,13 +325,15 @@ class DshExtension {
     if (this.connection === undefined) return undefined
     await this.ensureWorkspaceAttach()
     try {
+      const preset = await this.pickPreset()
+      const workspaceId = await this.pickWorkspace()
       const { sessionId } = await this.connection.createSession({
-        workspaceId: this.currentWorkspaceId,
-        agentPreset: this.config.defaultAgentPreset,
+        workspaceId,
+        agentPreset: preset ?? this.config.defaultAgentPreset,
       })
-      this.output.appendLine(`[dsh-vscode] 新建会话 ${sessionId}`)
+      this.output.appendLine(`[dsh-vscode] 新建会话 ${sessionId}${preset !== undefined ? `（preset=${preset}）` : ''}`)
       await this.store?.refresh()
-      this.openChatPanel(sessionId)
+      if (this.config.autoOpenChat) this.openChatPanel(sessionId)
       return sessionId
     } catch (error) {
       if (error instanceof RpcErrorResult && error.code === 'agent-preset-not-found') {
@@ -337,11 +341,48 @@ class DshExtension {
         const { sessionId } = await this.connection.createSession({ workspaceId: this.currentWorkspaceId })
         this.output.appendLine(`[dsh-vscode] 新建会话 ${sessionId}（默认 preset）`)
         await this.store?.refresh()
-        this.openChatPanel(sessionId)
+        if (this.config.autoOpenChat) this.openChatPanel(sessionId)
         return sessionId
       }
       throw error
     }
+  }
+
+  /** Ask for an agent preset when the server offers more than one. */
+  private async pickPreset(): Promise<string | undefined> {
+    if (this.connection === undefined) return undefined
+    try {
+      const presets = await this.connection.listPresets()
+      if (presets.length <= 1) return undefined
+      const items = presets.map((preset) => ({
+        label: preset.id,
+        description: preset.isDefault ? '默认' : preset.trust === 'user' ? '本地' : '系统',
+        preset: preset.id,
+      }))
+      const picked = await vscode.window.showQuickPick(items, {
+        placeHolder: '选择会话的 agent preset（跳过则用默认）',
+        matchOnDescription: true,
+      })
+      return picked?.preset
+    } catch {
+      return undefined // preset 目录加载失败时静默使用配置默认值
+    }
+  }
+
+  /** Ask for a workspace when more than one exists. */
+  private async pickWorkspace(): Promise<string | undefined> {
+    const workspaces = this.store?.allWorkspaces ?? []
+    if (workspaces.length <= 1) return this.currentWorkspaceId
+    const items = workspaces.map((workspace) => ({
+      label: workspace.title,
+      description: workspace.path,
+      workspaceId: workspace.workspaceId,
+    }))
+    const picked = await vscode.window.showQuickPick(items, {
+      placeHolder: '选择新会话所在的工作区',
+      matchOnDetail: true,
+    })
+    return picked?.workspaceId ?? this.currentWorkspaceId
   }
 
   private async refreshSessions(): Promise<void> {

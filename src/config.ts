@@ -6,6 +6,9 @@ const AUTO_ATTACH_WORKSPACE = 'dsh.autoAttachWorkspace'
 const DEFAULT_AGENT_PRESET = 'dsh.defaultAgentPreset'
 const HISTORY_PAGE_SIZE = 'dsh.historyPageSize'
 const RECONNECT_INTERVAL = 'dsh.reconnectIntervalMs'
+const AUTO_OPEN_CHAT = 'dsh.autoOpenChat'
+const SHOW_REASONING = 'dsh.showReasoning'
+const MAX_TOOL_RESULT_CHARS = 'dsh.maxToolResultChars'
 
 export interface DshConfig {
   serverUrl: string
@@ -14,17 +17,27 @@ export interface DshConfig {
   defaultAgentPreset: string
   historyPageSize: number
   reconnectIntervalMs: number
+  autoOpenChat: boolean
+  showReasoning: boolean
+  maxToolResultChars: number
+}
+
+function key(full: string): string {
+  return full.replace('dsh.', '')
 }
 
 export function readConfig(): DshConfig {
   const config = vscode.workspace.getConfiguration('dsh')
   return {
-    serverUrl: config.get<string>(SERVER_URL.replace('dsh.', ''), 'http://127.0.0.1:3080'),
-    autoConnect: config.get<boolean>(AUTO_CONNECT.replace('dsh.', ''), true),
-    autoAttachWorkspace: config.get<boolean>(AUTO_ATTACH_WORKSPACE.replace('dsh.', ''), true),
-    defaultAgentPreset: config.get<string>(DEFAULT_AGENT_PRESET.replace('dsh.', ''), 'standard'),
-    historyPageSize: config.get<number>(HISTORY_PAGE_SIZE.replace('dsh.', ''), 40),
-    reconnectIntervalMs: config.get<number>(RECONNECT_INTERVAL.replace('dsh.', ''), 3000),
+    serverUrl: config.get<string>(key(SERVER_URL), 'http://127.0.0.1:3080'),
+    autoConnect: config.get<boolean>(key(AUTO_CONNECT), true),
+    autoAttachWorkspace: config.get<boolean>(key(AUTO_ATTACH_WORKSPACE), true),
+    defaultAgentPreset: config.get<string>(key(DEFAULT_AGENT_PRESET), 'standard'),
+    historyPageSize: config.get<number>(key(HISTORY_PAGE_SIZE), 40),
+    reconnectIntervalMs: config.get<number>(key(RECONNECT_INTERVAL), 3000),
+    autoOpenChat: config.get<boolean>(key(AUTO_OPEN_CHAT), true),
+    showReasoning: config.get<boolean>(key(SHOW_REASONING), true),
+    maxToolResultChars: config.get<number>(key(MAX_TOOL_RESULT_CHARS), 4000),
   }
 }
 
