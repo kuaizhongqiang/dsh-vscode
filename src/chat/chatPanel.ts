@@ -111,6 +111,7 @@ export class ChatPanel {
       this.context.onTitleChanged?.(context.title)
     }
     this.running = context.running
+    this.postOp({ type: 'running', running: this.running })
     this.postOp({ type: 'status', text: this.running ? '运行中' : '空闲' })
   }
 
@@ -148,8 +149,19 @@ export class ChatPanel {
       this.postOp({ type: 'connection', connected: event.kind === 'connected' })
       return
     }
-    if (!('sessionId' in event) || event.sessionId !== this.sessionId) return
+    if (event.kind !== 'host-frame' && (!('sessionId' in event) || event.sessionId !== this.sessionId)) return
     switch (event.kind) {
+      case 'host-frame': {
+        const frame = event.frame as unknown as { type: string; sessionId?: string; running?: boolean; [k: string]: unknown }
+        if (frame.type === 'host/session-status' && frame.sessionId === this.sessionId) {
+          const running = Boolean(frame.running)
+          if (running !== this.running) {
+            this.running = running
+            this.postOp({ type: 'running', running })
+          }
+        }
+        break
+      }
       case 'projection':
         if (event.key === 'title' && typeof event.value === 'string' && event.value !== this.title) {
           this.title = event.value

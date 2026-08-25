@@ -1,6 +1,7 @@
 /**
  * dsh-vscode extension entry: activation, connection lifecycle, commands,
- * sidebar, status bar, and workspace auto-attach.
+ * sidebar, status bar, workspace auto-attach, local service management, and
+ * settings wiring (issues #2/#3/#5).
  */
 
 import * as vscode from 'vscode'
@@ -9,12 +10,14 @@ import { DshConnection } from './client/connection.ts'
 import type { DshEvent } from './client/connection.ts'
 import { RpcErrorResult, DshTransportError } from './client/rpc.ts'
 import { SessionStore } from './sessionStore.ts'
-import { SessionsTreeProvider } from './sidebar.ts'
+import { SessionsTreeProvider, type SidebarView } from './sidebar.ts'
 import { StatusBar } from './statusBar.ts'
 import { ChatPanel, errorMessage } from './chat/chatPanel.ts'
 import type { SessionStatsView } from './chat/types.ts'
 import { onConfigChanged, readConfig, sessionWebUrl, type DshConfig } from './config.ts'
-import type { SessionId, WorkspaceId } from './client/types.ts'
+import { LocalServerManager } from './localServer.ts'
+import { scanInstalledPlugins, scanAvailablePlugins, dshHome } from './plugins.ts'
+import type { AgentPresetEntry, SessionId, WorkspaceId } from './client/types.ts'
 
 let extension: DshExtension | undefined
 
@@ -34,6 +37,15 @@ export function deactivate(): void {
   extension = undefined
 }
 
+const VIEW_TITLES: Record<SidebarView, string | undefined> = {
+  home: undefined,
+  sessions: '会话列表',
+  service: '拉起服务',
+  settings: '设置',
+  plugins: '插件库',
+  presets: '模式列表',
+}
+
 class DshExtension {
   readonly output: vscode.OutputChannel
   private readonly context: vscode.ExtensionContext
@@ -44,8 +56,11 @@ class DshExtension {
   private store: SessionStore | undefined
   private treeProvider: SessionsTreeProvider | undefined
   private treeView: vscode.TreeView<unknown> | undefined
+  private localServer: LocalServerManager
+  private cachedPresets: AgentPresetEntry[] = []
   private currentWorkspaceId: WorkspaceId | undefined
   private currentWorkspacePath: string | undefined
+  private connected = false
   private connecting = false
   private config: DshConfig
 
@@ -54,10 +69,11 @@ class DshExtension {
     this.config = readConfig()
     this.output = vscode.window.createOutputChannel('DSH')
     this.statusBar = new StatusBar()
+    this.localServer = new LocalServerManager(() => this.config.extraHeaders)
   }
 
   activate(): void {
-    this.output.appendLine(`[dsh-vscode] 启动，serverUrl=${this.config.serverUrl}`)
+    this.output.appendLine(`[dsh-vscode] 启动，serverUrl=${this.config.serverUrl} remote=${this.config.remote}`)
 
     this.disposables.push(
       this.statusBar,
@@ -71,22 +87,48 @@ class DshExtension {
       vscode.commands.registerCommand('dsh.cancel', () => this.cancelSelected()),
       vscode.commands.registerCommand('dsh.renameSession', () => this.renameSelected()),
       vscode.commands.registerCommand('dsh.showOutput', () => this.output.show()),
+      // ---- sidebar navigation / settings (#3 / #5) ----
+      vscode.commands.registerCommand('dsh.openSettings', () => this.navigateSidebar('settings')),
+      vscode.commands.registerCommand('dsh.sidebarBack', () => this.navigateSidebar('home')),
+      vscode.commands.registerCommand('dsh.sidebarNavigate', (view: SidebarView) => this.navigateSidebar(view)),
+      vscode.commands.registerCommand('dsh.sidebarNavigateSettings', () => this.navigateSidebar('settings')),
+      vscode.commands.registerCommand('dsh.toggleAllSessions', () => this.toggleAllSessions()),
+      vscode.commands.registerCommand('dsh.toggleSetting', (key: string) => this.toggleSetting(key)),
+      vscode.commands.registerCommand('dsh.usePreset', (id: string) => this.usePreset(id)),
+      vscode.commands.registerCommand('dsh.openSettingsJson', () => void vscode.commands.executeCommand('workbench.action.openSettings', 'dsh')),
+      vscode.commands.registerCommand('dsh.openDshHome', () => this.openPath(dshHome())),
+      vscode.commands.registerCommand('dsh.openPluginPath', (path: string) => this.openPath(path)),
+      // ---- local service (#3) ----
+      vscode.commands.registerCommand('dsh.startLocalService', () => this.startLocalService()),
+      vscode.commands.registerCommand('dsh.stopLocalService', () => this.stopLocalService()),
       vscode.workspace.onDidChangeWorkspaceFolders(() => this.handleWorkspaceChange()),
       onConfigChanged(() => this.handleConfigChanged()),
+      { dispose: this.localServer.onChanged(() => this.refreshTree()) },
     )
+
+    // Tree view with the entry-style home provider (issues #3/#5).
+    this.treeProvider = new SessionsTreeProvider({
+      getStore: () => this.store,
+      getConnection: () => this.connection,
+      getConnected: () => this.connected,
+      getWorkspace: () => ({ workspaceId: this.currentWorkspaceId, path: this.currentWorkspacePath }),
+      getService: () => this.localServer.getState(),
+      getPlugins: () => [...scanInstalledPlugins(), ...scanAvailablePlugins()],
+      getPresets: () => this.cachedPresets,
+      getConfigValue: (key) => readConfigValue(key),
+    })
+    this.treeView = vscode.window.createTreeView('dsh.sessions', { treeDataProvider: this.treeProvider })
+    this.disposables.push(this.treeView)
 
     void this.ensureWorkspaceAttach()
     if (this.config.autoConnect) {
       void this.connect()
     }
-    // Tree view (provider may be empty until the store exists; rebuild on connect).
-    this.treeProvider = new SessionsTreeProvider(() => this.store)
-    this.treeView = vscode.window.createTreeView('dsh.sessions', { treeDataProvider: this.treeProvider })
-    this.disposables.push(this.treeView)
   }
 
   dispose(): void {
     ChatPanel.disposeAll()
+    this.localServer.dispose()
     this.connection?.dispose()
     this.store?.dispose()
     for (const disposable of this.disposables) disposable.dispose()
@@ -98,8 +140,38 @@ class DshExtension {
     if (this.connecting) return
     this.connecting = true
     this.statusBar.setState('connecting')
+    let url = this.config.serverUrl
     try {
-      const connection = new DshConnection(this.config.serverUrl, {
+      if (this.shouldStartLocalServer()) {
+        try {
+          this.statusBar.setState('connecting', '启动本地服务')
+          const result = await this.localServer.start(this.config.localServerPath)
+          url = result.url
+          this.output.appendLine(`[dsh-vscode] 本地服务就绪，连接 ${url}`)
+        } catch (error) {
+          const message = errorMessage(error)
+          this.output.appendLine(`[dsh-vscode] 本地服务启动失败: ${message}`)
+          const choice = await vscode.window.showErrorMessage(
+            `本地 DSH 服务启动失败：${message}`,
+            { modal: false },
+            '重试',
+            '仍直连原地址',
+            '查看日志',
+          )
+          if (choice === '重试') {
+            this.connecting = false
+            void this.connect()
+            return
+          }
+          if (choice === '查看日志') this.output.show()
+          if (choice !== '仍直连原地址') {
+            this.statusBar.setState('error')
+            this.connecting = false
+            return
+          }
+        }
+      }
+      const connection = new DshConnection(url, {
         reconnectIntervalMs: this.config.reconnectIntervalMs,
         extraHeaders: this.config.extraHeaders,
       })
@@ -107,21 +179,24 @@ class DshExtension {
       this.disposables.push({ dispose: off })
       await connection.connect()
       this.connection = connection
+      this.connected = true
       await vscode.commands.executeCommand('setContext', 'dsh.connected', true)
       this.statusBar.setState('connected', '已连接')
       this.output.appendLine(`[dsh-vscode] 已连接 ${connection.baseUrl}`)
       await this.initStore()
+      await this.refreshPresets()
       await this.ensureWorkspaceAttach()
       this.refreshTree()
     } catch (error) {
       this.connection?.dispose()
       this.connection = undefined
+      this.connected = false
       await vscode.commands.executeCommand('setContext', 'dsh.connected', false)
       this.statusBar.setState('error')
       const message = errorMessage(error)
       this.output.appendLine(`[dsh-vscode] 连接失败: ${message}`)
       const retry = await vscode.window.showErrorMessage(
-        `无法连接 DSH 服务 ${this.config.serverUrl}：${message}`,
+        `无法连接 DSH 服务 ${url}：${message}`,
         { modal: false },
         '重试',
         '设置',
@@ -133,9 +208,16 @@ class DshExtension {
     }
   }
 
+  private shouldStartLocalServer(): boolean {
+    // Local 模式 + 配置了本地服务目录 → 连接前先拉起服务。
+    if (this.config.remote) return false
+    return this.config.localServerPath.trim().length > 0
+  }
+
   private disconnect(): void {
     this.connection?.dispose()
     this.connection = undefined
+    this.connected = false
     this.store?.dispose()
     this.store = undefined
     void vscode.commands.executeCommand('setContext', 'dsh.connected', false)
@@ -152,26 +234,35 @@ class DshExtension {
     await this.store.refresh()
   }
 
+  private async refreshPresets(): Promise<void> {
+    if (this.connection === undefined) {
+      this.cachedPresets = []
+      return
+    }
+    try {
+      this.cachedPresets = await this.connection.listPresets()
+    } catch {
+      // preset 目录加载失败不影响主流程
+    }
+    this.refreshTree()
+  }
+
   private handleConnectionEvent(event: DshEvent): void {
     switch (event.kind) {
       case 'connected':
+        this.connected = true
         this.statusBar.setState('connected', '已连接')
         void this.initStore()
+        void this.refreshPresets()
         break
       case 'disconnected':
+        this.connected = false
         this.statusBar.setState('error', '已断开')
         this.output.appendLine(`[dsh-vscode] 事件流断开: ${event.reason}`)
         break
       case 'stream-error':
         this.output.appendLine(`[dsh-vscode] 事件流错误: ${errorMessage(event.error)}`)
         break
-      case 'host-frame': {
-        const frame = event.frame as { type: string; [k: string]: unknown }
-        if (frame.type === 'host/session-added' || frame.type === 'host/session-removed') {
-          // Store handles these; nothing extra needed.
-        }
-        break
-      }
       default:
         break
     }
@@ -181,20 +272,46 @@ class DshExtension {
     const next = readConfig()
     const serverChanged = next.serverUrl !== this.config.serverUrl
     const headersChanged = JSON.stringify(next.extraHeaders) !== JSON.stringify(this.config.extraHeaders)
+    const localPathChanged = next.localServerPath !== this.config.localServerPath
     this.config = next
+    if (localPathChanged) {
+      // 服务目录变更后，正在跑的本地服务已不属于新路径：停止并提示。
+      if (this.localServer.getState().status === 'running' || this.localServer.getState().status === 'starting') {
+        this.localServer.stop()
+        this.output.appendLine('[dsh-vscode] dsh.localServerPath 已变更，停止原本地服务')
+      }
+    }
     if (serverChanged || headersChanged) {
       this.output.appendLine(
-        `[dsh-vscode] 连接配置变更${serverChanged ? `（serverUrl → ${next.serverUrl}）` : '（extraHeaders）'}，重新连接`,
+        `[dsh-vscode] 连接配置变更${serverChanged ? `（serverUrl → ${next.serverUrl}）` : '（extraHeaders / Cloudflare cookie）'}，重新连接`,
       )
       this.disconnect()
       void this.connect()
     }
+    this.refreshTree()
   }
 
   // ---- store / tree ----
 
   private refreshTree(): void {
     this.treeProvider?.refresh()
+    this.updateTreeViewChrome()
+  }
+
+  private updateTreeViewChrome(): void {
+    if (this.treeView === undefined) return
+    const view = this.treeProvider?.getCurrentView() ?? 'home'
+    this.treeView.description = view === 'home' ? undefined : VIEW_TITLES[view]
+  }
+
+  private navigateSidebar(view: SidebarView): void {
+    this.treeProvider?.navigate(view)
+    this.updateTreeViewChrome()
+  }
+
+  private toggleAllSessions(): void {
+    this.treeProvider?.toggleAllSessions()
+    this.updateTreeViewChrome()
   }
 
   private selectedSession(): SessionId | undefined {
@@ -205,39 +322,87 @@ class DshExtension {
     return undefined
   }
 
-  // ---- workspace auto-attach ----
+  // ---- workspace auto-attach (#2) ----
 
+  /**
+   * 以当前 VSCode 打开的路径为准做"有则注入、无则新建"：
+   *  - 主工作区 = 活动编辑器所在的工作区文件夹（无则取第一个文件夹）
+   *  - 其余打开的文件夹也逐个关联（多根策略）
+   *  - 路径比较统一走规范化（realpath + 尾分隔符归一 + Windows 大小写不敏感）
+   *  - 未连接时记录意图，连接后自动补 attach；重连不重复执行
+   */
   private async ensureWorkspaceAttach(): Promise<void> {
-    const folder = vscode.workspace.workspaceFolders?.[0]
-    if (folder === undefined) return
+    const folders = vscode.workspace.workspaceFolders ?? []
+    if (folders.length === 0) return
     if (!this.config.autoAttachWorkspace) return
-    let path = folder.uri.fsPath
-    try {
-      path = realpathSync(path)
-    } catch {
-      // keep the original path if realpath fails
+
+    const primary = this.primaryWorkspaceFolder()
+    const ordered = [...folders].sort((a, b) => (a.uri.fsPath === primary?.uri.fsPath ? -1 : b.uri.fsPath === primary?.uri.fsPath ? 1 : 0))
+
+    let primaryWorkspaceId: WorkspaceId | undefined
+    let primaryWorkspacePath: string | undefined
+    const pending: { path: string; isPrimary: boolean }[] = []
+
+    for (const folder of ordered) {
+      const isPrimary = folder.uri.fsPath === primary?.uri.fsPath
+      let path = folder.uri.fsPath
+      try {
+        path = realpathSync(path)
+      } catch {
+        // keep the original path if realpath fails
+      }
+      path = normalizePath(path)
+      if (this.connection === undefined) {
+        pending.push({ path, isPrimary })
+        continue
+      }
+      const workspaceId = await this.attachPath(path)
+      if (isPrimary) {
+        primaryWorkspaceId = workspaceId
+        primaryWorkspacePath = path
+      }
     }
-    if (this.currentWorkspacePath === path && this.currentWorkspaceId !== undefined) return
+
     if (this.connection === undefined) {
-      // Remember intent; attach happens after connect().
-      this.currentWorkspacePath = path
+      // 记住意图：主工作区路径先记录，连接后再补 attach。
+      const primaryPending = pending.find((p) => p.isPrimary)
+      if (primaryPending !== undefined) this.currentWorkspacePath = primaryPending.path
+      else if (pending[0] !== undefined) this.currentWorkspacePath = pending[0].path
       return
     }
+    if (primaryWorkspaceId !== undefined) {
+      this.currentWorkspaceId = primaryWorkspaceId
+      this.currentWorkspacePath = primaryWorkspacePath
+    }
+  }
+
+  private primaryWorkspaceFolder(): vscode.WorkspaceFolder | undefined {
+    const folders = vscode.workspace.workspaceFolders ?? []
+    if (folders.length === 0) return undefined
+    const editorPath = vscode.window.activeTextEditor?.document.uri.fsPath
+    if (editorPath !== undefined) {
+      const containing = folders.find((folder) => isPathInside(editorPath, folder.uri.fsPath))
+      if (containing !== undefined) return containing
+    }
+    return folders[0]
+  }
+
+  /** 关联单个路径：已有工作区则注入，没有则新建。返回 workspaceId。 */
+  private async attachPath(path: string): Promise<WorkspaceId> {
+    if (this.connection === undefined) throw new Error('尚未连接 DSH')
     try {
       const workspaces = await this.connection.listWorkspaces()
-      const existing = workspaces.find((workspace) => workspace.path === path)
+      const existing = workspaces.find((workspace) => normalizePath(workspace.path) === path)
       if (existing !== undefined) {
-        this.currentWorkspaceId = existing.workspaceId
-        this.currentWorkspacePath = existing.path
         this.output.appendLine(`[dsh-vscode] 关联工作区: ${existing.title} (${existing.path})`)
-        return
+        return existing.workspaceId
       }
       const { workspace } = await this.connection.createWorkspace(path)
-      this.currentWorkspaceId = workspace.workspaceId
-      this.currentWorkspacePath = workspace.path
       this.output.appendLine(`[dsh-vscode] 创建并关联工作区: ${workspace.title} (${workspace.path})`)
+      return workspace.workspaceId
     } catch (error) {
-      this.output.appendLine(`[dsh-vscode] 工作区关联失败: ${errorMessage(error)}`)
+      this.output.appendLine(`[dsh-vscode] 工作区关联失败 (${path}): ${errorMessage(error)}`)
+      throw error
     }
   }
 
@@ -396,6 +561,7 @@ class DshExtension {
       this.requireConnection()
       this.statusBar.setState('connecting', '刷新中')
       await this.store?.refresh()
+      await this.refreshPresets()
       this.statusBar.setState('connected', '已连接')
     } catch (error) {
       void vscode.window.showErrorMessage(errorMessage(error))
@@ -445,9 +611,148 @@ class DshExtension {
       void vscode.window.showErrorMessage(errorMessage(error))
     }
   }
+
+  // ---- settings page (#3) ----
+
+  private async toggleSetting(key: string): Promise<void> {
+    const config = vscode.workspace.getConfiguration('dsh')
+    const current = config.get<unknown>(key)
+    try {
+      if (typeof current === 'boolean') {
+        await config.update(key, !current, vscode.ConfigurationTarget.Global)
+      } else if (typeof current === 'string') {
+        if (key === 'localServerPath') {
+          const picked = await vscode.window.showOpenDialog({
+            canSelectFiles: false,
+            canSelectFolders: true,
+            canSelectMany: false,
+            title: '选择本地 DSH 服务目录（dsh 安装 / 启动目录）',
+          })
+          if (picked !== undefined && picked.length > 0) {
+            await config.update(key, picked[0].fsPath, vscode.ConfigurationTarget.Global)
+          }
+          return
+        }
+        const value = await vscode.window.showInputBox({
+          prompt: settingPrompt(key),
+          value: current,
+          password: key === 'cloudflareCookie',
+          placeHolder: key === 'cloudflareCookie' ? '粘贴 CF_Authorization 的值' : undefined,
+        })
+        if (value !== undefined) {
+          await config.update(key, value.trim(), vscode.ConfigurationTarget.Global)
+        }
+      } else if (typeof current === 'number') {
+        const value = await vscode.window.showInputBox({ prompt: settingPrompt(key), value: String(current) })
+        if (value !== undefined && value.trim().length > 0) {
+          const parsed = Number(value.trim())
+          if (Number.isFinite(parsed)) {
+            await config.update(key, parsed, vscode.ConfigurationTarget.Global)
+          }
+        }
+      }
+    } catch (error) {
+      void vscode.window.showErrorMessage(`设置保存失败：${errorMessage(error)}`)
+    }
+  }
+
+  private async usePreset(id: string): Promise<void> {
+    try {
+      await vscode.workspace.getConfiguration('dsh').update('defaultAgentPreset', id, vscode.ConfigurationTarget.Global)
+      this.output.appendLine(`[dsh-vscode] 默认 agent preset → ${id}`)
+    } catch (error) {
+      void vscode.window.showErrorMessage(`设置默认 preset 失败：${errorMessage(error)}`)
+    }
+  }
+
+  // ---- local service (#3) ----
+
+  private async startLocalService(): Promise<void> {
+    const path = this.config.localServerPath.trim()
+    if (path.length === 0) {
+      const answer = await vscode.window.showInformationMessage(
+        '尚未配置本地服务目录（dsh.localServerPath），先去设置？',
+        '去设置',
+        '取消',
+      )
+      if (answer === '去设置') this.navigateSidebar('settings')
+      return
+    }
+    try {
+      this.statusBar.setState('connecting', '启动本地服务')
+      const result = await this.localServer.start(path)
+      this.statusBar.setState('connected', `本地服务 ${result.url}`)
+      this.output.appendLine(`[dsh-vscode] 本地服务已启动: ${result.url}`)
+      if (!this.connected) {
+        const answer = await vscode.window.showInformationMessage(
+          `本地 DSH 服务已就绪：${result.url}。要连接它吗？`,
+          '连接',
+          '稍后',
+        )
+        if (answer === '连接') void this.connect()
+      }
+    } catch (error) {
+      this.statusBar.setState('error')
+      void vscode.window.showErrorMessage(`本地服务启动失败：${errorMessage(error)}`)
+    }
+  }
+
+  private async stopLocalService(): Promise<void> {
+    this.localServer.stop()
+    this.output.appendLine('[dsh-vscode] 本地服务已停止')
+    this.refreshTree()
+  }
+
+  // ---- helpers ----
+
+  private openPath(path: string): void {
+    void vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(path)).then(
+      undefined,
+      () => void vscode.commands.executeCommand('vscode.open', vscode.Uri.file(path)),
+    )
+  }
 }
 
 export { DshTransportError }
+
+/** 读取一个 dsh.* 配置项的字符串形式（供侧边栏显示/编辑）。 */
+function readConfigValue(key: string): string | undefined {
+  const value = vscode.workspace.getConfiguration('dsh').get<unknown>(key)
+  if (typeof value === 'boolean') return String(value)
+  if (typeof value === 'number') return String(value)
+  if (typeof value === 'string') return value
+  return undefined
+}
+
+function settingPrompt(key: string): string {
+  const prompts: Record<string, string> = {
+    serverUrl: 'DSH 服务地址（如 http://127.0.0.1:3080 或 https://dsh.example.com）',
+    cloudflareCookie: 'Cloudflare Access 的 CF_Authorization cookie 值',
+    defaultAgentPreset: '新建会话的默认 agent preset',
+    historyPageSize: '历史消息一次拉取条数（5–200）',
+    reconnectIntervalMs: '事件流断开后的重连间隔（毫秒，≥1000）',
+    maxToolResultChars: '工具结果最大展示字符数（200–100000）',
+  }
+  return prompts[key] ?? `设置 dsh.${key}`
+}
+
+function normalizePath(p: string): string {
+  if (!p) return ''
+  let out = p.replace(/[\\/]+$/, '')
+  // Windows: 去掉 \\?\ 前缀（realpath 后可能出现）并统一大小写。
+  if (process.platform === 'win32') {
+    if (out.startsWith('\\\\?\\')) out = out.slice(4)
+    out = out.toLowerCase()
+  }
+  return out
+}
+
+function isPathInside(child: string, parent: string): boolean {
+  const normalizedChild = normalizePath(child)
+  const normalizedParent = normalizePath(parent)
+  if (normalizedParent.length === 0) return false
+  return normalizedChild === normalizedParent || normalizedChild.startsWith(normalizedParent + (process.platform === 'win32' ? '\\' : '/'))
+}
 
 /** 从 store 会话的投影快照里取初始用量统计。 */
 function initialStatsOf(session: { projections: Map<string, { value: unknown }> } | undefined): SessionStatsView | undefined {

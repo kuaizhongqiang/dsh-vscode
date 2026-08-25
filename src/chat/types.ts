@@ -47,6 +47,7 @@ export interface SessionStatsView {
 export type HostToWebviewOp =
   | { type: 'init'; sessionId: string; title?: string; cwd?: string; running: boolean; messages: RenderMessage[]; showReasoning: boolean }
   | { type: 'connection'; connected: boolean }
+  | { type: 'running'; running: boolean }
   | { type: 'models'; current: { provider: string; model: string; reasoningEffort?: string } | null; routable: boolean; groups: SessionModels['groups']; failures: SessionModels['failures'] }
   | { type: 'stats'; stats: SessionStatsView }
   | { type: 'append-message'; message: RenderMessage }

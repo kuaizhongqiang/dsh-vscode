@@ -238,13 +238,13 @@
       </select>
     </label>
     <button id="btn-open-browser" title="在浏览器打开该会话">$(globe) 浏览器</button>
-    <button id="btn-cancel" title="停止当前回合" disabled>停止</button>
   </header>
   <div id="messages">
     <div class="status-line" id="status-line"></div>
   </div>
   <div id="composer">
     <textarea id="input" rows="1" placeholder="输入消息，Enter 发送，Shift+Enter 换行…（连接后可用）" disabled></textarea>
+    <button id="btn-cancel" title="停止当前回合" disabled>停止</button>
     <button class="send" id="btn-send" disabled>发送</button>
   </div>
   <div id="stats-bar" class="stats-bar"><span class="stats-empty">暂无用量数据</span></div>
@@ -512,7 +512,7 @@
     var canInput = connectionOpened && routable;
     inputEl.disabled = !canInput;
     sendBtn.disabled = !canInput;
-    cancelBtn.disabled = !connectionOpened;
+    cancelBtn.disabled = !(connectionOpened && sessionRunning);
     inputEl.placeholder = canInput
       ? '输入消息，Enter 发送，Shift+Enter 换行…'
       : (connectionOpened ? '当前会话没有可用模型路由，无法发送' : '未连接 DSH，输入不可用');
@@ -526,6 +526,12 @@
       case 'connection': {
         connectionOpened = op.connected;
         if (!connectionOpened) sessionRunning = false;
+        updateBadge();
+        updateInputState();
+        break;
+      }
+      case 'running': {
+        sessionRunning = op.running;
         updateBadge();
         updateInputState();
         break;
