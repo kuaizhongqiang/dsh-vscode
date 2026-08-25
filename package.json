@@ -2,7 +2,7 @@
   "name": "dsh-vscode",
   "displayName": "DSH - DeepSeek Harness",
   "description": "在 VSCode 中连接 DeepSeek Harness（DSH）实例：会话列表、流式聊天、工具调用、审批与提问处理。",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "publisher": "kuaizhongqiang",
   "license": "MIT",
   "icon": "media/dsh-icon.png",
@@ -92,6 +92,21 @@
             "type": "string"
           },
           "description": "附加到每个 /api 请求和事件流 WebSocket 握手头的自定义请求头。远程部署在 Cloudflare Access 等访问控制后面时，可填 CF-Access-Client-Id / CF-Access-Client-Secret（服务令牌）或 Cookie: CF_Authorization=...（浏览器会话）。"
+        },
+        "dsh.remote": {
+          "type": "boolean",
+          "default": false,
+          "description": "连接模式：true = 远程模式（直连远程 DSH，可配合 Cloudflare cookie 认证）；false = 本地模式（可配置 dsh.localServerPath 拉起本地 dsh web）。"
+        },
+        "dsh.cloudflareCookie": {
+          "type": "string",
+          "default": "",
+          "description": "远程模式下 Cloudflare Access 的 CF_Authorization cookie 值；非空时自动作为 Cookie 请求头发送给每个 /api 请求与事件流 WebSocket 握手。"
+        },
+        "dsh.localServerPath": {
+          "type": "string",
+          "default": "",
+          "description": "本地模式下 dsh 安装 / 启动目录；配置后 VSCode 启动（或点击连接）会自动拉起 `dsh web`（cwd=该目录）并轮询就绪后连接，退出时自动终止服务进程。"
         }
       }
     },
@@ -140,6 +155,66 @@
         "command": "dsh.showOutput",
         "title": "DSH: 显示输出日志",
         "icon": "$(output)"
+      },
+      {
+        "command": "dsh.openSettings",
+        "title": "DSH: 打开设置",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "dsh.sidebarBack",
+        "title": "DSH: 返回首页",
+        "icon": "$(arrow-left)"
+      },
+      {
+        "command": "dsh.sidebarNavigate",
+        "title": "DSH: 切换侧边栏视图",
+        "icon": "$(arrow-swap)"
+      },
+      {
+        "command": "dsh.sidebarNavigateSettings",
+        "title": "DSH: 打开设置页",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "dsh.toggleAllSessions",
+        "title": "DSH: 切换会话范围",
+        "icon": "$(list-flat)"
+      },
+      {
+        "command": "dsh.toggleSetting",
+        "title": "DSH: 编辑设置项",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "dsh.usePreset",
+        "title": "DSH: 设为默认 preset",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "dsh.openSettingsJson",
+        "title": "DSH: 打开设置 JSON",
+        "icon": "$(json)"
+      },
+      {
+        "command": "dsh.openDshHome",
+        "title": "DSH: 打开 DSH_HOME 目录",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "dsh.openPluginPath",
+        "title": "DSH: 打开插件路径",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "dsh.startLocalService",
+        "title": "DSH: 启动本地服务",
+        "icon": "$(play)"
+      },
+      {
+        "command": "dsh.stopLocalService",
+        "title": "DSH: 停止本地服务",
+        "icon": "$(debug-stop)"
       }
     ],
     "viewsContainers": {
@@ -181,6 +256,11 @@
           "command": "dsh.disconnect",
           "when": "view == dsh.sessions && dsh.connected",
           "group": "navigation@3"
+        },
+        {
+          "command": "dsh.openSettings",
+          "when": "view == dsh.sessions",
+          "group": "navigation@4"
         }
       ],
       "view/item/context": [
@@ -218,6 +298,18 @@
         {
           "command": "dsh.disconnect",
           "when": "dsh.connected"
+        },
+        {
+          "command": "dsh.sidebarNavigate",
+          "when": "false"
+        },
+        {
+          "command": "dsh.toggleSetting",
+          "when": "false"
+        },
+        {
+          "command": "dsh.openPluginPath",
+          "when": "false"
         }
       ]
     },

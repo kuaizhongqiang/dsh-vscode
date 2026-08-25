@@ -10,6 +10,9 @@ const AUTO_OPEN_CHAT = 'dsh.autoOpenChat'
 const SHOW_REASONING = 'dsh.showReasoning'
 const MAX_TOOL_RESULT_CHARS = 'dsh.maxToolResultChars'
 const EXTRA_HEADERS = 'dsh.extraHeaders'
+const REMOTE = 'dsh.remote'
+const CLOUDFLARE_COOKIE = 'dsh.cloudflareCookie'
+const LOCAL_SERVER_PATH = 'dsh.localServerPath'
 
 export interface DshConfig {
   serverUrl: string
@@ -23,6 +26,12 @@ export interface DshConfig {
   maxToolResultChars: number
   /** 附加到每个 /api 请求与 mux WebSocket 握手头的自定义请求头（如 Cloudflare Access 认证）。 */
   extraHeaders: Record<string, string>
+  /** Remote 模式开关：true = 直连远程 DSH（配 Cloudflare cookie 认证），false = 本地模式（可拉起本地 dsh web）。 */
+  remote: boolean
+  /** Remote 模式下 Cloudflare Access 的 `CF_Authorization` cookie 值，自动映射到请求头 `Cookie: CF_Authorization=…`。 */
+  cloudflareCookie: string
+  /** Local 模式下 dsh 安装/启动目录；配置后扩展可自动拉起 `dsh web`（cwd=该路径）并连接。 */
+  localServerPath: string
 }
 
 function key(full: string): string {
@@ -31,6 +40,7 @@ function key(full: string): string {
 
 export function readConfig(): DshConfig {
   const config = vscode.workspace.getConfiguration('dsh')
+  const cloudflareCookie = config.get<string>(key(CLOUDFLARE_COOKIE), '')
   return {
     serverUrl: config.get<string>(key(SERVER_URL), 'http://127.0.0.1:3080'),
     autoConnect: config.get<boolean>(key(AUTO_CONNECT), true),
@@ -41,16 +51,31 @@ export function readConfig(): DshConfig {
     autoOpenChat: config.get<boolean>(key(AUTO_OPEN_CHAT), true),
     showReasoning: config.get<boolean>(key(SHOW_REASONING), true),
     maxToolResultChars: config.get<number>(key(MAX_TOOL_RESULT_CHARS), 4000),
-    extraHeaders: readExtraHeaders(config),
+    extraHeaders: readExtraHeaders(config, cloudflareCookie),
+    remote: config.get<boolean>(key(REMOTE), false),
+    cloudflareCookie,
+    localServerPath: config.get<string>(key(LOCAL_SERVER_PATH), ''),
   }
 }
 
-function readExtraHeaders(config: vscode.WorkspaceConfiguration): Record<string, string> {
+function readExtraHeaders(config: vscode.WorkspaceConfiguration, cloudflareCookie: string): Record<string, string> {
   const raw = config.get<Record<string, string>>(key(EXTRA_HEADERS), {})
   const out: Record<string, string> = {}
   for (const [name, value] of Object.entries(raw)) {
     if (typeof value === 'string' && value.length > 0 && name.trim().length > 0) {
       out[name.trim()] = value
+    }
+  }
+  // Remote 模式下的 Cloudflare Access cookie 自动映射为 Cookie 请求头。
+  const cookie = cloudflareCookie.trim()
+  if (cookie.length > 0) {
+    const name = 'Cookie'
+    const header = out[name]
+    // 显式手写的 Cookie 头里如果没有 CF_Authorization，则注入；否则保留手写值。
+    if (header === undefined || !header.includes('CF_Authorization=')) {
+      out[name] = header === undefined || header.length === 0
+        ? `CF_Authorization=${cookie}`
+        : `${header}; CF_Authorization=${cookie}`
     }
   }
   return out
