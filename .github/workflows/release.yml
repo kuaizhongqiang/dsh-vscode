@@ -50,4 +50,4 @@ jobs:
         if: env.OPEN_VSX_TOKEN != ''
         env:
           OPEN_VSX_TOKEN: ${{ secrets.OPEN_VSX_TOKEN }}
-        run: pnpm dlx ovsx publish --no-dependencies -p "$OPEN_VSX_TOKEN"
+        run: pnpm dlx ovsx publish --no-dependencies dsh-vscode-*.vsix -p "$OPEN_VSX_TOKEN"
