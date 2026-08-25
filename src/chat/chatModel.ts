@@ -217,7 +217,12 @@ export class ChatModel {
     const message = data.message
     const text = extractText(message.content.filter((block) => block.type === 'text'))
     const reasoning = extractText(message.content.filter((block) => block.type === 'reasoning'))
-    const id = message.id ?? `m-${data.turn}-${data.step}`
+    // A live assistant/message carries its own message id; keep the streaming
+    // placeholder's id so model + webview replace it in place instead of
+    // appending a duplicate bubble.
+    const streamingMatch = this.streaming !== undefined
+      && this.streaming.turn === data.turn && this.streaming.step === data.step
+    const id = streamingMatch ? this.streaming!.id : (message.id ?? `m-${data.turn}-${data.step}`)
     const toolCallBlocks = message.content.filter((block): block is Extract<ContentBlock, { type: 'tool-call' }> =>
       block.type === 'tool-call')
     // Sync tool calls from the final message blocks (complete arguments).
@@ -252,7 +257,7 @@ export class ChatModel {
     } else {
       this.messages.push(render)
     }
-    if (this.streaming !== undefined && this.streaming.turn === data.turn && this.streaming.step === data.step) {
+    if (streamingMatch) {
       this.streaming = undefined
     }
     this.onOp({ type: 'finalize-message', id, message: render })

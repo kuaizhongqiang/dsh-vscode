@@ -2,9 +2,11 @@
   "name": "dsh-vscode",
   "displayName": "DSH - DeepSeek Harness",
   "description": "在 VSCode 中连接 DeepSeek Harness（DSH）实例：会话列表、流式聊天、工具调用、审批与提问处理。",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "publisher": "kuaizhongqiang",
   "license": "MIT",
+  "icon": "media/dsh-icon.png",
+  "packageManager": "pnpm@11.13.1",
   "repository": {
     "type": "git",
     "url": "https://github.com/kuaizhongqiang/dsh-vscode.git"
@@ -207,13 +209,16 @@
     "watch": "node esbuild.js --watch",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "package": "vsce package --no-dependencies",
-    "vscode:prepublish": "node esbuild.js"
+    "vscode:prepublish": "node esbuild.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
     "@types/vscode": "^1.90.0",
     "@vscode/vsce": "^3.0.0",
     "esbuild": "^0.24.0",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
   }
 }

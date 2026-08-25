@@ -39,7 +39,7 @@ pnpm build          # 产出 dist/extension.js
 
 ```bash
 pnpm exec vsce package
-code --install-extension dsh-vscode-0.1.0.vsix
+code --install-extension dsh-vscode-0.0.0.vsix
 ```
 
 ## 配置
@@ -115,6 +115,16 @@ pnpm build       # esbuild
 - 历史分页「加载更多」尚未实现（仅加载最近一页）。
 - 图片消息暂不展示（文本/推理/工具已支持）。
 - 事件流为单向推送；无断点续传，重连后靠 seq 去重收敛。
+
+## CI 与发布
+
+- `.github/workflows/ci.yml`：push/PR 时执行 typecheck、单元测试（vitest）、构建、webview JS 校验并打包 VSIX 产物。
+- `.github/workflows/release.yml`：推送 `v*` tag 时自动构建并发布 GitHub Release（附 VSIX）。可选往
+  [Open VSX](https://open-vsx.org) 发布：在仓库 Secrets 中配置 `OPEN_VSX_TOKEN` 后自动生效。
+
+```bash
+git tag v0.0.0 && git push origin v0.0.0   # 触发发布流水线
+```
 
 ## License
 
