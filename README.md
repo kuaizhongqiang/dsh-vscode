@@ -1,7 +1,13 @@
 # dsh-vscode
 
+[![Open VSX 版本](https://img.shields.io/open-vsx/v/kuaizhongqiang/dsh-vscode?label=Open%20VSX)](https://open-vsx.org/extension/kuaizhongqiang/dsh-vscode)
+[![Open VSX 下载](https://img.shields.io/open-vsx/dt/kuaizhongqiang/dsh-vscode)](https://open-vsx.org/extension/kuaizhongqiang/dsh-vscode)
+[![GitHub Release](https://img.shields.io/github/v/release/kuaizhongqiang/dsh-vscode)](https://github.com/kuaizhongqiang/dsh-vscode/releases)
+
 在 VSCode 中连接 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/deepseek-harness) 实例的扩展：
 会话列表、流式聊天、工具调用卡片、审批与提问处理，无需打开浏览器。
+
+**安装**：[Open VSX 扩展页](https://open-vsx.org/extension/kuaizhongqiang/dsh-vscode) 或 [GitHub Releases](https://github.com/kuaizhongqiang/dsh-vscode/releases) 下载 VSIX。
 
 ## 功能
 
