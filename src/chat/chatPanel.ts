@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { DshConnection, DshEvent } from '../client/connection.ts'
 import { ChatModel } from './chatModel.ts'
-import type { HostToWebviewOp, WebviewToHostRequest } from './types.ts'
+import type { HostToWebviewOp, SessionStatsView, WebviewToHostRequest } from './types.ts'
 import { sessionWebUrl } from '../config.ts'
 
 export interface ChatPanelContext {
@@ -22,6 +22,8 @@ export interface ChatPanelContext {
   historyPageSize: number
   showReasoning: boolean
   maxToolResultChars: number
+  /** 打开面板时的初始用量统计（来自 store 里的投影快照）。 */
+  initialStats?: SessionStatsView
   onTitleChanged?: (title: string) => void
   onStateChanged?: () => void
 }
@@ -54,11 +56,13 @@ export class ChatPanel {
   private pendingOps: HostToWebviewOp[] = []
   private title: string | undefined
   private running: boolean
+  private stats: SessionStatsView = {}
 
   private constructor(context: ChatPanelContext) {
     this.context = context
     this.title = context.title
     this.running = context.running
+    this.stats = { ...context.initialStats }
 
     this.panel = vscode.window.createWebviewPanel(
       'dsh.chat',
@@ -152,6 +156,9 @@ export class ChatPanel {
           this.panel.title = event.value
           this.postOp({ type: 'title', title: event.value })
           this.context.onTitleChanged?.(event.value)
+        } else if (event.key === 'sessionStats' || event.key === 'tokenUsage' || event.key === 'contextPressure') {
+          this.mergeStats(event.key, event.value)
+          this.postOp({ type: 'stats', stats: this.stats })
         }
         break
       case 'approval-requested':
@@ -200,6 +207,7 @@ export class ChatPanel {
         })
         this.flushPending()
         void this.loadModels()
+        this.postOp({ type: 'stats', stats: this.stats })
         break
       case 'prompt':
         void this.sendPrompt(message.text)
@@ -230,6 +238,36 @@ export class ChatPanel {
       case 'open-in-browser':
         void vscode.env.openExternal(vscode.Uri.parse(sessionWebUrl(this.context.connection.baseUrl, this.sessionId)))
         break
+    }
+  }
+
+  private mergeStats(key: string, value: unknown): void {
+    if (value === null || typeof value !== 'object') return
+    const record = value as Record<string, unknown>
+    if (key === 'sessionStats') {
+      this.stats = {
+        ...this.stats,
+        turns: numberOr(record.turns, this.stats.turns),
+        steps: numberOr(record.steps, this.stats.steps),
+        llmMs: numberOr(record.llmMs, this.stats.llmMs),
+        toolMs: numberOr(record.toolMs, this.stats.toolMs),
+        decodeTokens: numberOr(record.decodeTokens, this.stats.decodeTokens),
+      }
+    } else if (key === 'tokenUsage') {
+      this.stats = {
+        ...this.stats,
+        uncachedInputTokens: numberOr(record.uncachedInputTokens, this.stats.uncachedInputTokens),
+        outputTokens: numberOr(record.outputTokens, this.stats.outputTokens),
+        cacheReadTokens: numberOr(record.cacheReadTokens, this.stats.cacheReadTokens),
+        cacheWriteTokens: numberOr(record.cacheWriteTokens, this.stats.cacheWriteTokens),
+      }
+    } else if (key === 'contextPressure') {
+      this.stats = {
+        ...this.stats,
+        pressureTokens: numberOr(record.pressureTokens, this.stats.pressureTokens),
+        projectedTokens: numberOr(record.projectedTokens, this.stats.projectedTokens),
+        contextWindow: numberOr(record.contextWindow, this.stats.contextWindow),
+      }
     }
   }
 
@@ -283,4 +321,8 @@ export class ChatPanel {
 export function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message
   return String(error)
+}
+
+function numberOr(value: unknown, fallback: number | undefined): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
 }

@@ -211,6 +211,20 @@
   #composer button:disabled { opacity: 0.4; cursor: default; }
   #composer .hint { font-size: 10.5px; color: var(--muted); }
   #empty { text-align: center; color: var(--muted); margin-top: 40px; }
+
+  .stats-bar {
+    flex: 0 0 auto;
+    display: flex; flex-wrap: wrap; gap: 4px 14px;
+    padding: 4px 12px 6px;
+    border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--muted);
+    background: var(--vscode-editorWidget-background, #252526);
+  }
+  .stats-bar .stat { white-space: nowrap; }
+  .stats-bar .stat b { color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stats-bar .stat.warn { color: var(--warn); }
+  .stats-bar .stat.alert { color: var(--error); }
+  .stats-bar .stats-empty { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -233,6 +247,7 @@
     <textarea id="input" rows="1" placeholder="输入消息，Enter 发送，Shift+Enter 换行…（连接后可用）" disabled></textarea>
     <button class="send" id="btn-send" disabled>发送</button>
   </div>
+  <div id="stats-bar" class="stats-bar"><span class="stats-empty">暂无用量数据</span></div>
   <div class="hint" style="padding:0 12px 6px" id="hint"></div>
 
 <script>
@@ -248,6 +263,7 @@
   var cwdEl = document.getElementById('h-cwd');
   var badgeEl = document.getElementById('h-badge');
   var hintEl = document.getElementById('hint');
+  var statsBarEl = document.getElementById('stats-bar');
   var toolById = {};   // callId -> {el, statusEl, argsPre, resultPre, wrapper}
   var msgEls = {};     // message id -> {el, textEl, reasoningEl}
   var msgTexts = {};   // message id -> accumulated text
@@ -384,6 +400,46 @@
     return '等待中…';
   }
 
+  function fmtMs(ms) {
+    if (ms === undefined || ms === null) return null;
+    if (ms >= 60000) return (ms / 60000).toFixed(1) + ' 分';
+    return (ms / 1000).toFixed(1) + ' 秒';
+  }
+  function fmtTokens(n) {
+    if (n === undefined || n === null) return null;
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+    return String(n);
+  }
+
+  function renderStats(stats) {
+    if (!stats || Object.keys(stats).length === 0) {
+      statsBarEl.innerHTML = '<span class="stats-empty">暂无用量数据</span>';
+      return;
+    }
+    var chips = [];
+    if (stats.turns !== undefined) chips.push({ label: '轮次', value: stats.turns });
+    if (stats.steps !== undefined) chips.push({ label: '步数', value: stats.steps });
+    if (stats.outputTokens !== undefined) chips.push({ label: '输出', value: fmtTokens(stats.outputTokens) + ' tok' });
+    if (stats.uncachedInputTokens !== undefined) chips.push({ label: '输入', value: fmtTokens(stats.uncachedInputTokens) + ' tok' });
+    if (stats.cacheReadTokens !== undefined && stats.cacheReadTokens > 0) chips.push({ label: '缓存', value: fmtTokens(stats.cacheReadTokens) + ' tok' });
+    if (stats.decodeTokens !== undefined) chips.push({ label: '解码', value: fmtTokens(stats.decodeTokens) + ' tok' });
+    if (stats.llmMs !== undefined) chips.push({ label: '耗时', value: fmtMs(stats.llmMs) });
+    if (stats.toolMs !== undefined) chips.push({ label: '工具', value: fmtMs(stats.toolMs) });
+    if (stats.pressureTokens !== undefined && stats.contextWindow !== undefined && stats.contextWindow > 0) {
+      var pct = Math.round(stats.pressureTokens / stats.contextWindow * 100);
+      var cls = pct >= 90 ? 'stat alert' : pct >= 70 ? 'stat warn' : 'stat';
+      chips.push({ label: '上下文', value: fmtTokens(stats.pressureTokens) + ' / ' + fmtTokens(stats.contextWindow) + ' (' + pct + '%)', cls: cls });
+    }
+    if (chips.length === 0) {
+      statsBarEl.innerHTML = '<span class="stats-empty">暂无用量数据</span>';
+      return;
+    }
+    statsBarEl.innerHTML = chips.map(function (c) {
+      return '<span class="' + (c.cls || 'stat') + '">' + c.label + ' <b>' + c.value + '</b></span>';
+    }).join('');
+  }
+
   function renderMessage(msg) {
     var existing = msgEls[msg.id];
     if (existing) {
@@ -487,7 +543,6 @@
       case 'models': {
         modelsLoaded = true;
         routable = op.routable;
-        // rebuild the model <select>
         modelSelect.innerHTML = '';
         var groups = op.groups || [];
         if (groups.length === 0) {
@@ -516,6 +571,9 @@
         updateInputState();
         break;
       }
+      case 'stats':
+        renderStats(op.stats);
+        break;
       case 'append-message':
         renderMessage(op.message);
         break;

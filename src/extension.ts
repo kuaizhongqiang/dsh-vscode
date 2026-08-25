@@ -12,6 +12,7 @@ import { SessionStore } from './sessionStore.ts'
 import { SessionsTreeProvider } from './sidebar.ts'
 import { StatusBar } from './statusBar.ts'
 import { ChatPanel, errorMessage } from './chat/chatPanel.ts'
+import type { SessionStatsView } from './chat/types.ts'
 import { onConfigChanged, readConfig, sessionWebUrl, type DshConfig } from './config.ts'
 import type { SessionId, WorkspaceId } from './client/types.ts'
 
@@ -279,6 +280,7 @@ class DshExtension {
       historyPageSize: this.config.historyPageSize,
       showReasoning: this.config.showReasoning,
       maxToolResultChars: this.config.maxToolResultChars,
+      initialStats: initialStatsOf(session),
       onTitleChanged: (title) => {
         const current = this.store?.getSession(sessionId)
         if (current !== undefined) {
@@ -442,3 +444,21 @@ class DshExtension {
 }
 
 export { DshTransportError }
+
+/** 从 store 会话的投影快照里取初始用量统计。 */
+function initialStatsOf(session: { projections: Map<string, { value: unknown }> } | undefined): SessionStatsView | undefined {
+  if (session === undefined) return undefined
+  const stats: SessionStatsView = {}
+  const pick = (key: string, field: string): void => {
+    const entry = session.projections.get(key)
+    const record = entry?.value as Record<string, unknown> | undefined
+    const value = record?.[field]
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      ;(stats as Record<string, unknown>)[field] = value
+    }
+  }
+  for (const field of ['turns', 'steps', 'llmMs', 'toolMs', 'decodeTokens']) pick('sessionStats', field)
+  for (const field of ['uncachedInputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens']) pick('tokenUsage', field)
+  for (const field of ['pressureTokens', 'projectedTokens', 'contextWindow']) pick('contextPressure', field)
+  return Object.keys(stats).length > 0 ? stats : undefined
+}

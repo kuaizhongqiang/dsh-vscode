@@ -28,10 +28,27 @@ export interface RenderMessage {
   time: number
 }
 
+/** 用量统计（来自 sessionStats / tokenUsage / contextPressure 投影）。 */
+export interface SessionStatsView {
+  turns?: number
+  steps?: number
+  llmMs?: number
+  toolMs?: number
+  decodeTokens?: number
+  uncachedInputTokens?: number
+  outputTokens?: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+  pressureTokens?: number
+  projectedTokens?: number
+  contextWindow?: number
+}
+
 export type HostToWebviewOp =
   | { type: 'init'; sessionId: string; title?: string; cwd?: string; running: boolean; messages: RenderMessage[]; showReasoning: boolean }
   | { type: 'connection'; connected: boolean }
   | { type: 'models'; current: { provider: string; model: string; reasoningEffort?: string } | null; routable: boolean; groups: SessionModels['groups']; failures: SessionModels['failures'] }
+  | { type: 'stats'; stats: SessionStatsView }
   | { type: 'append-message'; message: RenderMessage }
   | { type: 'stream-text'; id: string; text: string }
   | { type: 'stream-reasoning'; id: string; text: string }
