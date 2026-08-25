@@ -639,6 +639,19 @@ class DshExtension {
           }
           return
         }
+        if (key === 'promptMode') {
+          const picked = await vscode.window.showQuickPick(
+            [
+              { label: '插话（steer）', description: '立即处理，与 DSH Web 一致（默认）', value: 'steer' },
+              { label: '排队（queue）', description: '等当前回合结束后再处理', value: 'queue' },
+            ],
+            { placeHolder: '选择发送消息的模式' },
+          )
+          if (picked !== undefined) {
+            await config.update(key, picked.value, vscode.ConfigurationTarget.Global)
+          }
+          return
+        }
         const value = await vscode.window.showInputBox({
           prompt: settingPrompt(key),
           value: current,

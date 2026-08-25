@@ -52,6 +52,16 @@ export interface FileCandidate {
   isDir: boolean
 }
 
+/** 发送给 DSH 的图片附件（base64，DSH 提升为持久附件）。 */
+export interface PromptImage {
+  /** 展示名（可选）。 */
+  name?: string
+  /** image/png | image/jpeg | image/webp | image/gif。 */
+  mediaType: string
+  /** canonical base64 编码的图片字节。 */
+  data: string
+}
+
 export type HostToWebviewOp =
   | { type: 'init'; sessionId: string; title?: string; cwd?: string; running: boolean; messages: RenderMessage[]; showReasoning: boolean }
   | { type: 'connection'; connected: boolean }
@@ -73,10 +83,12 @@ export type HostToWebviewOp =
   | { type: 'status'; text: string }
   | { type: 'error'; text: string }
   | { type: 'file-candidates'; candidates: FileCandidate[] }
+  | { type: 'file-read-result'; path: string; name: string; mediaType: string; data: string; error?: string }
+  | { type: 'audio-saved'; name: string; path: string; error?: string }
 
 export type WebviewToHostRequest =
   | { type: 'ready' }
-  | { type: 'prompt'; text: string }
+  | { type: 'prompt'; text: string; images?: PromptImage[] }
   | { type: 'cancel' }
   | { type: 'approve'; rpcId: string; approvalId: string }
   | { type: 'reject'; rpcId: string; approvalId: string }
@@ -84,6 +96,8 @@ export type WebviewToHostRequest =
   | { type: 'model-change'; provider: string; model: string }
   | { type: 'open-in-browser' }
   | { type: 'file-pick'; query: string }
+  | { type: 'file-read'; path: string }
+  | { type: 'audio-paste'; name: string; mediaType: string; data: string }
 
 /** Default truncation cap for tool results before shipping to the webview. */
 export const MAX_TOOL_RESULT_CHARS = 4000

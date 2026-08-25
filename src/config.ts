@@ -13,6 +13,9 @@ const EXTRA_HEADERS = 'dsh.extraHeaders'
 const REMOTE = 'dsh.remote'
 const CLOUDFLARE_COOKIE = 'dsh.cloudflareCookie'
 const LOCAL_SERVER_PATH = 'dsh.localServerPath'
+const PROMPT_MODE = 'dsh.promptMode'
+
+export type PromptMode = 'steer' | 'queue'
 
 export interface DshConfig {
   serverUrl: string
@@ -32,6 +35,8 @@ export interface DshConfig {
   cloudflareCookie: string
   /** Local 模式下 dsh 安装/启动目录；配置后扩展可自动拉起 `dsh web`（cwd=该路径）并连接。 */
   localServerPath: string
+  /** 发送消息的模式：'steer' = 插话（立即处理，默认，与 DSH Web 一致），'queue' = 排队（等当前回合结束）。 */
+  promptMode: PromptMode
 }
 
 function key(full: string): string {
@@ -55,7 +60,13 @@ export function readConfig(): DshConfig {
     remote: config.get<boolean>(key(REMOTE), false),
     cloudflareCookie,
     localServerPath: config.get<string>(key(LOCAL_SERVER_PATH), ''),
+    promptMode: readPromptMode(config),
   }
+}
+
+function readPromptMode(config: vscode.WorkspaceConfiguration): PromptMode {
+  const value = config.get<string>(key(PROMPT_MODE), 'steer')
+  return value === 'queue' ? 'queue' : 'steer'
 }
 
 function readExtraHeaders(config: vscode.WorkspaceConfiguration, cloudflareCookie: string): Record<string, string> {

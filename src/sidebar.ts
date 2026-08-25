@@ -413,6 +413,14 @@ export class SessionsTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         valueKind: 'bool',
       })
     }
+    nodes.push({
+      kind: 'setting',
+      key: 'promptMode',
+      label: '发送消息模式（dsh.promptMode）',
+      value: this.textValue('promptMode') === 'queue' ? '排队（queue）' : '插话（steer）',
+      valueKind: 'text',
+      description: '插话 = 立即处理（与 DSH Web 一致）；排队 = 等当前回合结束',
+    })
     nodes.push({ kind: 'settings-group', title: '数值' })
     for (const key of ['defaultAgentPreset', 'historyPageSize', 'reconnectIntervalMs', 'maxToolResultChars'] as const) {
       nodes.push({

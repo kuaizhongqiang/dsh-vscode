@@ -5,12 +5,11 @@
  */
 
 import * as vscode from 'vscode'
-import { readFileSync } from 'node:fs'
-import { readdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { basename, join } from 'node:path'
 import type { DshConnection, DshEvent } from '../client/connection.ts'
 import { ChatModel } from './chatModel.ts'
-import type { FileCandidate, HostToWebviewOp, SessionStatsView, WebviewToHostRequest } from './types.ts'
+import type { FileCandidate, HostToWebviewOp, PromptImage, SessionStatsView, WebviewToHostRequest } from './types.ts'
 import { sessionWebUrl } from '../config.ts'
 
 export interface ChatPanelContext {
@@ -223,7 +222,7 @@ export class ChatPanel {
         this.postOp({ type: 'stats', stats: this.stats })
         break
       case 'prompt':
-        void this.sendPrompt(message.text)
+        void this.sendPrompt(message.text, message.images)
         break
       case 'cancel':
         void this.context.connection.cancel(this.sessionId).catch((error) => {
@@ -254,6 +253,67 @@ export class ChatPanel {
       case 'file-pick':
         void this.pickFiles(message.query)
         break
+      case 'file-read':
+        void this.readDroppedFile(message.path)
+        break
+      case 'audio-paste':
+        void this.saveAudioAttachment(message)
+        break
+    }
+  }
+
+  /** Ctrl+V 粘贴的音频：保存到 {cwd}/.dsh-paste/ 并以相对路径回传（DSH 无音频 block，只能文件引用）。 */
+  private async saveAudioAttachment(message: { name: string; mediaType: string; data: string }): Promise<void> {
+    try {
+      const cwd = this.context.cwd && this.context.cwd.length > 0
+        ? this.context.cwd
+        : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+      if (cwd === undefined) {
+        this.postOp({ type: 'audio-saved', name: message.name, path: '', error: '无工作目录，无法保存音频' })
+        return
+      }
+      const dir = join(cwd, '.dsh-paste')
+      mkdirSync(dir, { recursive: true })
+      const safeName = message.name.replace(/[\\/:*?"<>|]/g, '_')
+      const fileName = `${Date.now()}-${safeName}`
+      writeFileSync(join(dir, fileName), Buffer.from(message.data, 'base64'))
+      this.postOp({ type: 'audio-saved', name: message.name, path: `.dsh-paste/${fileName}` })
+    } catch (error) {
+      this.postOp({ type: 'audio-saved', name: message.name, path: '', error: `保存音频失败：${errorMessage(error)}` })
+    }
+  }
+
+  /** webview 拖入的 file:// URI：宿主读文件为 base64 图片回传（VSCode webview 拿不到系统文件的 File 对象）。 */
+  private async readDroppedFile(rawPath: string): Promise<void> {
+    try {
+      let filePath = rawPath
+      if (filePath.startsWith('file://')) {
+        filePath = decodeURIComponent(filePath.replace(/^file:\/\//, ''))
+        // Windows 盘符：file:///C:/x → C:/x
+        if (/^[A-Za-z]:\//.test(filePath)) filePath = filePath.replace(/^\//, '')
+      }
+      const data = readFileSync(filePath)
+      const mediaType = mediaTypeOf(filePath)
+      if (mediaType === undefined) {
+        this.postOp({ type: 'file-read-result', path: rawPath, name: basename(filePath), mediaType: '', data: '', error: '不支持的图片类型（仅 png/jpeg/webp/gif）' })
+        return
+      }
+      this.postOp({
+        type: 'file-read-result',
+        path: rawPath,
+        name: basename(filePath),
+        mediaType,
+        data: data.toString('base64'),
+      })
+    } catch (error) {
+      this.postOp({
+        type: 'file-read-result',
+        path: rawPath,
+        name: basename(rawPath),
+        mediaType: '',
+        data: '',
+        error: `读取文件失败：${errorMessage(error)}`,
+      })
     }
   }
 
@@ -304,9 +364,11 @@ export class ChatPanel {
     }
   }
 
-  private async sendPrompt(text: string): Promise<void> {
+  private async sendPrompt(text: string, images: PromptImage[] = []): Promise<void> {
     try {
-      await this.context.connection.prompt(this.sessionId, text, 'queue')
+      // 默认插话（steer，与 DSH Web 一致）；可在 dsh.promptMode 切换为排队（queue）。
+      const mode = vscode.workspace.getConfiguration('dsh').get<'steer' | 'queue'>('promptMode', 'steer')
+      await this.context.connection.prompt(this.sessionId, text, mode, images)
     } catch (error) {
       this.postOp({ type: 'error', text: `发送失败：${errorMessage(error)}` })
     }
@@ -362,6 +424,16 @@ function numberOr(value: unknown, fallback: number | undefined): number | undefi
 
 const MAX_CANDIDATES = 40
 const HIDDEN_PREFIXES = ['.', 'node_modules']
+
+/** 按扩展名推断图片 mediaType（DSH 仅接受 png/jpeg/webp/gif）。 */
+function mediaTypeOf(filePath: string): string | undefined {
+  const lower = filePath.toLowerCase()
+  if (lower.endsWith('.png')) return 'image/png'
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg'
+  if (lower.endsWith('.webp')) return 'image/webp'
+  if (lower.endsWith('.gif')) return 'image/gif'
+  return undefined
+}
 
 /** 扫描目录一级条目为 @ 候选：目录在前、名称前缀匹配 query、跳过隐藏项。 */
 function scanCandidates(cwd: string, query: string): FileCandidate[] {

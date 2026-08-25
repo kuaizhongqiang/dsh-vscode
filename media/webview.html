@@ -167,6 +167,7 @@
   .tool-card .tool-head .dot.done { background: var(--ok); }
   .tool-card .tool-head .dot.error { background: var(--error); }
   .tool-card .tool-head .tool-name { font-weight: 600; font-family: var(--vscode-editor-font-family, Consolas, monospace); }
+  .tool-card .tool-head .tool-name-icon { font-size: 12px; flex: 0 0 auto; }
   .tool-card .tool-head .tool-status { color: var(--muted); font-size: 11px; margin-left: auto; }
   .tool-card .tool-head .tool-time { color: var(--muted); font-size: 11px; }
   .tool-card .tool-body {
@@ -462,11 +463,49 @@
     return '⏳';
   }
 
+  // 常用工具图标（Web 端 read/edit 等有专属图标与内容展示，这里对齐）
+  var TOOL_ICONS = {
+    read: '📖', edit: '✏️', write: '📝', grep: '🔍', glob: '📂',
+    bash: '💻', execute: '💻', pwsh: '💻', terminal: '💻', powershell: '💻',
+    web_search: '🌐', 'web-search': '🌐', websearch: '🌐',
+    describe_image: '🖼️', 'read-image': '🖼️', read_image: '🖼️',
+    watchlist_add: '⭐', watchlist_remove: '⭐', watchlist_list: '⭐',
+    stock_quote: '📈', stock_kline: '📈', stock_report: '📈',
+  };
+
+  function toolNameIcon(name) {
+    var n = String(name || '').toLowerCase();
+    if (TOOL_ICONS[n] !== undefined) return TOOL_ICONS[n];
+    // 前缀匹配（read_file / web_search_xx 之类）
+    for (var k in TOOL_ICONS) {
+      if (n.indexOf(k) === 0) return TOOL_ICONS[k];
+    }
+    return null;
+  }
+
+  /** 参数美化：合法 JSON 缩进展示，流式不完整时原样显示。 */
+  function prettyArgs(raw) {
+    if (!raw) return '';
+    try {
+      var parsed = JSON.parse(raw);
+      if (parsed !== null && typeof parsed === 'object') return JSON.stringify(parsed, null, 2);
+    } catch (e) { /* 不完整 JSON：原样显示 */ }
+    return raw;
+  }
+
   function renderToolCard(tool) {
     if (toolById[tool.callId]) {
       var t = toolById[tool.callId];
+      // 消息重渲染后把已存在的卡片归位到所属消息之后
+      // （流式期间 tool-call op 无 messageId，卡片会 append 到消息区末尾）。
+      if (tool.messageId) {
+        var home = msgEls[tool.messageId];
+        if (home && home.el && t.card.nextSibling !== home.el.nextSibling) {
+          messagesEl.insertBefore(t.card, home.el.nextSibling);
+        }
+      }
       t.nameEl.textContent = tool.name || t.nameEl.textContent;
-      t.argsPre.textContent = tool.arguments || t.argsPre.textContent;
+      if (tool.arguments !== undefined) t.argsPre.textContent = prettyArgs(tool.arguments);
       t.dot.className = 'dot ' + tool.status;
       t.statusEl.textContent = statusText(tool.status);
       t.iconEl.textContent = toolIconFor(tool.status);
@@ -482,14 +521,17 @@
     var head = el('div', 'tool-head');
     var iconEl = el('span', 'tool-icon', toolIconFor(tool.status));
     var dot = el('span', 'dot ' + tool.status);
+    var nameIcon = toolNameIcon(tool.name);
     var nameEl = el('span', 'tool-name', escapeHtml(tool.name));
     var timeEl = el('span', 'tool-time', '');
     var statusEl = el('span', 'tool-status', statusText(tool.status));
-    head.appendChild(iconEl); head.appendChild(dot); head.appendChild(nameEl); head.appendChild(timeEl); head.appendChild(statusEl);
+    head.appendChild(iconEl); head.appendChild(dot);
+    if (nameIcon) head.appendChild(el('span', 'tool-name-icon', nameIcon));
+    head.appendChild(nameEl); head.appendChild(timeEl); head.appendChild(statusEl);
     var body = el('div', 'tool-body');
     var argsLabel = el('div', 'tool-result-label', '参数');
     var argsPre = el('pre');
-    argsPre.textContent = tool.arguments || '';
+    argsPre.textContent = prettyArgs(tool.arguments);
     body.appendChild(argsLabel); body.appendChild(argsPre);
     var resultPre = null;
     if (tool.result !== undefined) {
@@ -501,6 +543,8 @@
     }
     card.appendChild(head); card.appendChild(body);
     head.addEventListener('click', function () { card.classList.toggle('open'); });
+    // 默认展开参数与结果（对齐 DSH Web 的展示；内容过长时 pre 内部滚动，点击头部可折叠）。
+    card.classList.add('open');
     toolById[tool.callId] = { card: card, iconEl: iconEl, dot: dot, nameEl: nameEl, statusEl: statusEl, timeEl: timeEl, argsPre: argsPre, resultPre: resultPre, wrapper: null };
     // place after the owning message, else at the end
     var anchor = tool.messageId ? msgEls[tool.messageId] : null;
@@ -599,12 +643,13 @@
       body.appendChild(el('div', 'tool-result-label', '（已中断）'));
     }
     content.appendChild(body);
-    // tool calls inside this message
+    // 先把消息插入消息区并登记 msgEls，再渲染其工具卡片：
+    // 顺序反了会导致卡片 append 到消息之前（错乱、看起来"没显示"）。
+    messagesEl.appendChild(wrap);
+    msgEls[msg.id] = { el: wrap, textEl: textEl, bodyEl: body, reasoningEl: null };
     (msg.toolCalls || []).forEach(function (tool) {
       renderToolCard(Object.assign({}, tool, { messageId: msg.id }));
     });
-    messagesEl.appendChild(wrap);
-    msgEls[msg.id] = { el: wrap, textEl: textEl, bodyEl: body, reasoningEl: null };
     lastMessageId = msg.id;
     removeEmptyState();
     scrollBottom();
@@ -773,8 +818,8 @@
             var resLabel = el('div', 'tool-result-label', op.isError ? '结果（错误）' : '结果');
             t.resultPre = el('pre');
             if (op.isError) t.resultPre.style.color = 'var(--error)';
-            t.el.querySelector('.tool-body').appendChild(resLabel);
-            t.el.querySelector('.tool-body').appendChild(t.resultPre);
+            t.card.querySelector('.tool-body').appendChild(resLabel);
+            t.card.querySelector('.tool-body').appendChild(t.resultPre);
           }
           t.resultPre.textContent = op.result;
         }
@@ -895,6 +940,35 @@
           return { title: c.path, desc: c.isDir ? '目录' : '文件', data: c };
         });
         showSuggest(items);
+        break;
+      }
+      case 'file-read-result': {
+        // 拖入的 file:// URI 已由宿主读出：作为图片附件加入
+        if (op.error || !op.data) { setStatus(op.error || '读取文件失败', true); return; }
+        attachments.push({
+          kind: 'image',
+          name: op.name,
+          mediaType: op.mediaType,
+          data: op.data,
+          dataUrl: 'data:' + op.mediaType + ';base64,' + op.data,
+        });
+        renderChips();
+        setStatus('已添加图片附件：' + op.name, false);
+        break;
+      }
+      case 'audio-saved': {
+        attachments.forEach(function (a) {
+          if (a.kind === 'audio' && a.pending && a.name === op.name) {
+            a.pending = false;
+            a.path = op.path;
+          }
+        });
+        if (op.error) {
+          setStatus(op.error, true);
+        } else {
+          setStatus('音频已保存：' + op.path + '（发送时以 @路径 引用）', false);
+        }
+        renderChips();
         break;
       }
     }
@@ -1038,6 +1112,10 @@
       });
       showSuggest(items.map(function (c) { return { title: '/' + c.cmd, desc: c.label + ' — ' + c.desc, data: c }; }));
     } else {
+      // 异步链路：先保存当前 trigger，等 host 返回 file-candidates 后再 showSuggest
+      // （showSuggest 会重算 trigger，但这里必须落盘，否则 candidates 到达时
+      //   suggestTrigger 仍为 null，候选会被直接丢弃 —— @ 弹层打不开）。
+      suggestTrigger = t;
       if (suggestTimer) clearTimeout(suggestTimer);
       suggestTimer = setTimeout(function () {
         post({ type: 'file-pick', query: t.query });
@@ -1045,16 +1123,81 @@
     }
   }
 
-  // ---- attachments (drag & drop) ----
+  // ---- attachments (paste / drag & drop) ----
   function renderChips() {
     chipsEl.innerHTML = '';
     attachments.forEach(function (a, i) {
-      var chip = el('span', 'chip', '📎 ' + escapeHtml(a.name));
+      var chip = el('span', 'chip', '');
+      if (a.kind === 'image' && a.dataUrl) {
+        var img = document.createElement('img');
+        img.src = a.dataUrl;
+        img.style.cssText = 'width:16px;height:16px;object-fit:cover;border-radius:3px;vertical-align:-3px;margin-right:4px;';
+        chip.appendChild(img);
+        chip.appendChild(document.createTextNode(escapeHtml(a.name)));
+      } else if (a.kind === 'audio') {
+        chip.appendChild(el('span', '', (a.pending ? '⏳ ' : '🎵 ') + escapeHtml(a.name)));
+      } else if (a.kind === 'pending-file') {
+        chip.appendChild(el('span', '', '⏳ ' + escapeHtml(a.rawPath.split('/').pop() || a.rawPath)));
+      } else {
+        chip.appendChild(el('span', '', '📎 ' + escapeHtml(a.name)));
+      }
       var x = el('span', 'x', '✕');
       x.title = '移除';
       x.addEventListener('click', function () { attachments.splice(i, 1); renderChips(); });
       chip.appendChild(x);
       chipsEl.appendChild(chip);
+    });
+  }
+
+  var IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+
+  function readFileAsBase64(file, cb) {
+    var reader = new FileReader();
+    reader.onload = function () {
+      var dataUrl = String(reader.result);
+      var comma = dataUrl.indexOf(',');
+      cb(comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl, dataUrl);
+    };
+    reader.onerror = function () { cb(null, null); };
+    reader.readAsDataURL(file);
+  }
+
+  function guessImageType(name) {
+    var n = (name || '').toLowerCase();
+    if (n.endsWith('.png')) return 'image/png';
+    if (n.endsWith('.jpg') || n.endsWith('.jpeg')) return 'image/jpeg';
+    if (n.endsWith('.webp')) return 'image/webp';
+    if (n.endsWith('.gif')) return 'image/gif';
+    return undefined;
+  }
+
+  function guessAudioName(mediaType) {
+    var map = { 'audio/wav': 'audio.wav', 'audio/x-wav': 'audio.wav', 'audio/mpeg': 'audio.mp3', 'audio/mp3': 'audio.mp3', 'audio/mp4': 'audio.m4a', 'audio/ogg': 'audio.ogg', 'audio/flac': 'audio.flac' };
+    return map[mediaType] || ('audio.' + (mediaType.split('/')[1] || 'bin'));
+  }
+
+  function addImageAttachment(file) {
+    var mt = file.type && IMAGE_TYPES.indexOf(file.type) >= 0 ? file.type : guessImageType(file.name);
+    if (!mt) { setStatus('不支持的图片格式（仅 png / jpeg / webp / gif）', true); return; }
+    readFileAsBase64(file, function (b64, dataUrl) {
+      if (!b64) { setStatus('读取图片失败', true); return; }
+      var ext = mt === 'image/jpeg' ? 'jpg' : mt.split('/')[1];
+      var name = file.name || ('粘贴图片.' + ext);
+      attachments.push({ kind: 'image', name: name, mediaType: mt, data: b64, dataUrl: dataUrl });
+      renderChips();
+      setStatus('已添加图片附件：' + name, false);
+    });
+  }
+
+  function addAudioAttachment(file) {
+    var mt = file.type && file.type.indexOf('audio/') === 0 ? file.type : guessAudioName(file.name);
+    var name = file.name || guessAudioName(mt);
+    readFileAsBase64(file, function (b64) {
+      if (!b64) { setStatus('读取音频失败', true); return; }
+      attachments.push({ kind: 'audio', name: name, mediaType: mt, data: b64, pending: true, path: null });
+      renderChips();
+      post({ type: 'audio-paste', name: name, mediaType: mt, data: b64 });
+      setStatus('音频附件保存中…', false);
     });
   }
 
@@ -1088,34 +1231,54 @@
   });
   inputEl.addEventListener('paste', function (e) {
     if (!e.clipboardData) return;
-    var hasImage = false;
-    for (var i = 0; i < e.clipboardData.items.length; i++) {
-      if (e.clipboardData.items[i].type && e.clipboardData.items[i].type.indexOf('image/') === 0) hasImage = true;
-    }
-    if (hasImage) return; // 图片粘贴暂不支持，交给默认行为
+    var items = e.clipboardData.items;
     var files = e.clipboardData.files;
+    // 1) 剪贴板里直接是图片 / 音频 blob（截图、复制的媒体）
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      if (!it || !it.type) continue;
+      if (it.type.indexOf('image/') === 0) {
+        var imgFile = it.getAsFile();
+        if (imgFile) { e.preventDefault(); addImageAttachment(imgFile); return; }
+      }
+      if (it.type.indexOf('audio/') === 0) {
+        var audFile = it.getAsFile();
+        if (audFile) { e.preventDefault(); addAudioAttachment(audFile); return; }
+      }
+    }
+    // 2) 复制的文件（资源管理器 / 文件夹里 Ctrl+C 的文件）
     if (files && files.length > 0) {
       e.preventDefault();
       var refs = [];
       for (var j = 0; j < files.length; j++) {
-        if (files[j].name) refs.push('@' + files[j].name);
+        var f = files[j];
+        if (!f || !f.name) continue;
+        if (f.type && f.type.indexOf('image/') === 0) { addImageAttachment(f); continue; }
+        if (f.type && f.type.indexOf('audio/') === 0) { addAudioAttachment(f); continue; }
+        refs.push('@' + f.name);
       }
       if (refs.length > 0) insertAtCursor(refs.join(' '));
     }
   });
   function send() {
     var text = inputEl.value.trim();
-    if (!text && attachments.length === 0) return;
-    if (attachments.length > 0) {
-      var refs = attachments.map(function (a) { return '@' + a.name; }).join(' ');
-      text = text ? text + '\n' + refs : refs;
-    }
+    var images = attachments.filter(function (a) { return a.kind === 'image' && a.data; })
+      .map(function (a) { return { name: a.name, mediaType: a.mediaType, data: a.data }; });
+    var pendingAudio = attachments.some(function (a) { return a.kind === 'audio' && a.pending; });
+    var pendingRead = attachments.some(function (a) { return a.kind === 'pending-file'; });
+    if (!text && images.length === 0 && attachments.length === 0) return;
+    if (pendingAudio) { setStatus('音频附件还在保存中，请稍候再发送', true); return; }
+    if (pendingRead) { setStatus('拖入的文件还在读取中，请稍候再发送', true); return; }
+    var refs = attachments.filter(function (a) {
+      return a.kind === 'file' || (a.kind === 'audio' && a.path);
+    }).map(function (a) { return '@' + (a.path || a.name); }).join(' ');
+    if (refs) text = text ? text + '\n' + refs : refs;
     inputEl.value = '';
     attachments = [];
     renderChips();
     inputEl.style.height = 'auto';
     hideSuggest();
-    post({ type: 'prompt', text: text });
+    post({ type: 'prompt', text: text, images: images });
   }
   sendBtn.addEventListener('click', send);
   cancelBtn.addEventListener('click', function () { post({ type: 'cancel' }); });
@@ -1138,19 +1301,37 @@
   composerEl.addEventListener('drop', function (e) {
     e.preventDefault();
     var files = e.dataTransfer.files;
-    if (!files || files.length === 0) return;
     var added = 0;
-    for (var i = 0; i < files.length; i++) {
-      var f = files[i];
-      if (!f || !f.name) continue;
-      if (attachments.some(function (a) { return a.name === f.name; })) continue;
-      attachments.push({ name: f.name });
+    if (files && files.length > 0) {
+      for (var i = 0; i < files.length; i++) {
+        var f = files[i];
+        if (!f || !f.name) continue;
+        if (f.type && f.type.indexOf('image/') === 0) { addImageAttachment(f); added++; continue; }
+        if (f.type && f.type.indexOf('audio/') === 0) { addAudioAttachment(f); added++; continue; }
+        if (attachments.some(function (a) { return a.kind === 'file' && a.name === f.name; })) continue;
+        attachments.push({ kind: 'file', name: f.name });
+        added++;
+      }
+      if (added > 0) {
+        renderChips();
+        setStatus('已添加 ' + added + ' 个附件', false);
+      }
+      return;
+    }
+    // VSCode webview 拿不到系统文件的 File 对象：解析 text/uri-list 里的 file:// URI，
+    // 交给宿主读文件（图片回传 base64，其他文件引用路径）。
+    var uris = e.dataTransfer.getData('text/uri-list') || '';
+    var fileUris = uris.split(/\r?\n/).filter(function (u) {
+      return u.startsWith('file://');
+    });
+    for (var k = 0; k < fileUris.length; k++) {
+      var uri = fileUris[k];
+      if (attachments.some(function (a) { return a.rawPath === uri; })) continue;
+      attachments.push({ kind: 'pending-file', rawPath: uri });
+      post({ type: 'file-read', path: uri });
       added++;
     }
-    if (added > 0) {
-      renderChips();
-      setStatus('已添加 ' + added + ' 个附件，发送时将以 @文件名 引用', false);
-    }
+    if (added > 0) renderChips();
   });
 
   updateInputState();

@@ -29,7 +29,7 @@
   - **提问表单**：Agent 提问时以选项 / 多选 / 自由文本作答
   - **斜杠命令**：输入 `/` 弹出命令候选（停止当前回合 / 清空显示 / 浏览器打开 / 帮助）
   - **`@` 文件提及**：输入 `@` 列出会话目录下的文件 / 文件夹，选中后以 `@路径` 引用
-  - **文件拖入 / 粘贴**：把文件拖进输入区生成附件 chip，发送时以 `@文件名` 引用；粘贴非图片文件自动转为 `@文件名`
+  - **文件拖入 / 粘贴**：把文件拖进输入区生成附件 chip，发送时以 `@文件名` 引用；**粘贴 / 拖入图片**（png/jpeg/webp/gif）直接作为附件发送（模型需支持图片输入）；**粘贴音频**保存到会话目录 `.dsh-paste/` 并以 `@路径` 引用
   - 停止当前回合（输入区与发送并排）、一键在浏览器打开同一会话、底部用量统计条
 - **新建会话引导**：有多个 agent preset / 工作区时弹出选择，新会话可用不同 preset 与目录
 - **工作区自动关联**：打开文件夹时自动在 DSH 创建 / 关联同名工作区（路径规范化比较，Windows 大小写 / junction 不重复创建，多根工作区全部关联），新会话默认在该目录工作。
@@ -94,7 +94,7 @@ pnpm build          # 产出 dist/extension.js
 
 ```bash
 pnpm exec vsce package --no-dependencies
-code --install-extension dsh-vscode-0.0.6.vsix
+code --install-extension dsh-vscode-0.0.7.vsix
 ```
 
 ## 配置
@@ -113,6 +113,7 @@ code --install-extension dsh-vscode-0.0.6.vsix
 | `dsh.autoOpenChat` | `true` | 新建会话后自动打开聊天面板 |
 | `dsh.showReasoning` | `true` | 是否显示模型的思考过程（reasoning）折叠块 |
 | `dsh.maxToolResultChars` | `4000` | 工具调用结果在面板中的最大展示字符数 |
+| `dsh.promptMode` | `steer` | 发送消息模式：`steer` = 插话（立即处理，与 DSH Web 一致），`queue` = 排队（等当前回合结束） |
 | `dsh.extraHeaders` | `{}` | 附加到每个 `/api` 请求与事件流 WebSocket 握手头的自定义请求头（见「远程访问」） |
 
 ## 命令
@@ -188,12 +189,12 @@ pnpm test        # vitest 单元测试
 node scripts/check-webview-js.mjs   # webview 内联 JS 语法校验
 ```
 
-## 已知限制（v0.0.6）
+## 已知限制（v0.0.7）
 
 - 历史分页「加载更多」尚未实现（仅加载最近一页）。
-- 图片消息暂不展示（文本 / 推理 / 工具已支持；粘贴图片不会转成附件，仅提示不支持）。
+- 图片消息暂不展示字节（文本 / 推理 / 工具已支持；粘贴 / 拖入图片会作为附件以 `image` block 发送给模型，历史回显仅显示 `[图片]` 占位）。
 - 事件流为单向推送；无断点续传，重连后靠 seq 去重收敛。
-- `@` 文件提及扫描的是会话 cwd 的一级目录（不递归）；拖入文件以 `@文件名` 文本引用（webview 拿不到完整路径）。
+- `@` 文件提及扫描的是会话 cwd 的一级目录（不递归）；拖入普通文件以 `@文件名` 文本引用（webview 拿不到完整路径）。
 
 ## CI 与发布
 
@@ -202,7 +203,7 @@ node scripts/check-webview-js.mjs   # webview 内联 JS 语法校验
   [Open VSX](https://open-vsx.org) 发布：在仓库 Secrets 中配置 `OPEN_VSX_TOKEN` 后自动生效。
 
 ```bash
-git tag v0.0.6 && git push origin v0.0.6   # 触发发布流水线
+git tag v0.0.7 && git push origin v0.0.7   # 触发发布流水线
 ```
 
 ## License

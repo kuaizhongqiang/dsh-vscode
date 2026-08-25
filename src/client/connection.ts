@@ -125,11 +125,20 @@ export class DshConnection {
     return this.rpc.call<SessionHistoryResult>('session.history', { sessionId, maxMessages })
   }
 
-  async prompt(sessionId: SessionId, text: string, mode: 'queue' | 'steer' = 'queue'): Promise<void> {
+  async prompt(
+    sessionId: SessionId,
+    text: string,
+    mode: 'queue' | 'steer' = 'queue',
+    images: { name?: string; mediaType: string; data: string }[] = [],
+  ): Promise<void> {
+    const content: unknown[] = [{ type: 'text', text }]
+    for (const image of images) {
+      content.push({ type: 'image', mediaType: image.mediaType, data: image.data, name: image.name })
+    }
     await this.rpc.call('session.prompt', {
       sessionId,
       mode,
-      content: [{ type: 'text', text }],
+      content,
       clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     })
   }

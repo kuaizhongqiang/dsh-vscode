@@ -316,6 +316,10 @@ export function extractText(blocks: ContentBlock[]): string {
       case 'tool-result':
         parts.push(extractText(block.content))
         break
+      case 'image':
+        // 图片消息暂不回显字节，占位展示。
+        parts.push('[图片]')
+        break
       default:
         break
     }
