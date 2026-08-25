@@ -688,10 +688,16 @@ class DshExtension {
       this.statusBar.setState('connecting', '启动本地服务')
       const result = await this.localServer.start(path)
       this.statusBar.setState('connected', `本地服务 ${result.url}`)
-      this.output.appendLine(`[dsh-vscode] 本地服务已启动: ${result.url}`)
+      if (result.reused) {
+        this.output.appendLine(`[dsh-vscode] 检测到已有本地实例，复用: ${result.url}`)
+      } else {
+        this.output.appendLine(`[dsh-vscode] 本地服务已启动: ${result.url}`)
+      }
       if (!this.connected) {
         const answer = await vscode.window.showInformationMessage(
-          `本地 DSH 服务已就绪：${result.url}。要连接它吗？`,
+          result.reused
+            ? `检测到本地 DSH 实例已就绪：${result.url}（已复用，未重复拉起）。要连接它吗？`
+            : `本地 DSH 服务已就绪：${result.url}。要连接它吗？`,
           '连接',
           '稍后',
         )

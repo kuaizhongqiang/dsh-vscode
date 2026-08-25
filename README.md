@@ -12,7 +12,7 @@
 ## 功能
 
 - **连接管理**：本地 / 远程双模式，状态栏实时显示连接状态；事件流断线自动重连。
-  - **本地模式**（默认）：配置 `dsh.localServerPath` 后自动拉起 `dsh web` 并连接；也可直接连默认 `http://127.0.0.1:3080`。
+  - **本地模式**（默认）：配置 `dsh.localServerPath` 后自动拉起 `dsh web` 并连接（若 3080 端口已有 DSH 实例在运行则直接复用，不重复拉起）；也可直接连默认 `http://127.0.0.1:3080`。
   - **远程模式**：开启 `dsh.remote` 并填入 Cloudflare cookie（`dsh.cloudflareCookie`），自动作为认证头发送，改配置自动重连。
 - **侧边栏入口式首页**（会话 / 拉起服务 / 进入配置 / 插件库 / 模式列表）：
   - 首页高亮当前工作区路径，显示连接状态与各入口概览，可进入子视图并返回；
@@ -73,6 +73,9 @@ DSH 的 Web 端能访问是因为浏览器持有 `CF_Authorization` 会话 cooki
 - 配置时会校验：路径存在、是目录、含 dsh 启动器；不满足时给出明确错误提示，不会写入。
 - 配置后 VSCode 启动（或点击连接 / 侧边栏「拉起服务 → 启动服务」）会自动 `spawn dsh web`（cwd=该目录）、
   轮询就绪后连接；扩展退出时自动终止服务进程（Windows 下杀进程树），不残留孤儿进程。
+- 端口占用处理：`dsh web` 固定监听 3080。若 3080 上**已有 DSH 实例**在运行（例如已有一个 `dsh web`），
+  「拉起服务」会**直接复用**该实例（幂等，不重复拉起、不报端口冲突）；若 3080 被**非 DSH 进程**占用，
+  会明确报错提示先释放端口，不会盲目拉起导致 EADDRINUSE 崩溃。
 
 ## 安装
 
@@ -91,7 +94,7 @@ pnpm build          # 产出 dist/extension.js
 
 ```bash
 pnpm exec vsce package --no-dependencies
-code --install-extension dsh-vscode-0.0.4.vsix
+code --install-extension dsh-vscode-0.0.6.vsix
 ```
 
 ## 配置
@@ -185,7 +188,7 @@ pnpm test        # vitest 单元测试
 node scripts/check-webview-js.mjs   # webview 内联 JS 语法校验
 ```
 
-## 已知限制（v0.0.4）
+## 已知限制（v0.0.6）
 
 - 历史分页「加载更多」尚未实现（仅加载最近一页）。
 - 图片消息暂不展示（文本 / 推理 / 工具已支持；粘贴图片不会转成附件，仅提示不支持）。
@@ -199,7 +202,7 @@ node scripts/check-webview-js.mjs   # webview 内联 JS 语法校验
   [Open VSX](https://open-vsx.org) 发布：在仓库 Secrets 中配置 `OPEN_VSX_TOKEN` 后自动生效。
 
 ```bash
-git tag v0.0.4 && git push origin v0.0.4   # 触发发布流水线
+git tag v0.0.6 && git push origin v0.0.6   # 触发发布流水线
 ```
 
 ## License

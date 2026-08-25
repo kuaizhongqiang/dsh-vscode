@@ -333,7 +333,10 @@ export class SessionsTreeProvider implements vscode.TreeDataProvider<TreeNode> {
       error: state.status === 'failed',
     })
     if (state.status === 'running' && state.url !== undefined) {
-      nodes.push({ kind: 'status', text: state.url, icon: 'globe', description: state.pid !== undefined ? `PID ${state.pid}` : undefined })
+      const details: string[] = []
+      if (state.reused) details.push('复用已有实例')
+      if (state.pid !== undefined) details.push(`PID ${state.pid}`)
+      nodes.push({ kind: 'status', text: state.url, icon: 'globe', description: details.join(' · ') || undefined })
     }
     if (state.error !== undefined) {
       nodes.push({ kind: 'status', text: state.error, icon: 'warning', error: true })

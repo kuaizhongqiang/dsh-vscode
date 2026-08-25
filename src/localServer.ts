@@ -7,6 +7,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, statSync } from 'node:fs'
+import { connect as netConnect } from 'node:net'
 import { join } from 'node:path'
 import { DshRpcClient } from './client/rpc.ts'
 
@@ -58,13 +59,16 @@ export interface LocalServiceState {
   error?: string
   /** 启动时使用的目录。 */
   cwd?: string
+  /** true = 未拉起新进程，直接复用了端口上已有的 DSH 实例。 */
+  reused?: boolean
 }
 
 const MAX_LOG_LINES = 80
 const READY_TIMEOUT_MS = 60_000
 const POLL_INTERVAL_MS = 500
 const CALL_TIMEOUT_MS = 2_000
-const DEFAULT_URL = 'http://127.0.0.1:3080'
+const DEFAULT_PORT = 3080
+const DEFAULT_URL = `http://127.0.0.1:${DEFAULT_PORT}`
 const URL_RE = /https?:\/\/127\.0\.0\.1:\d+/g
 
 export class LocalServerManager {
@@ -90,19 +94,46 @@ export class LocalServerManager {
   /**
    * Ensure a local `dsh web` process is running under `cwd` and ready to serve
    * RPC. Resolves with the ready base URL. Rejects on spawn failure / timeout.
+   *
+   * Idempotent: if the configured port already answers DSH RPC (an instance is
+   * already running), it is reused instead of spawning a duplicate that would
+   * die with EADDRINUSE.
    */
-  async start(cwd: string): Promise<{ url: string }> {
+  async start(cwd: string): Promise<{ url: string; reused?: boolean }> {
     const validation = validateLocalServerPath(cwd)
     if (!validation.ok) {
       this.setState({ ...this.state, status: 'failed', error: validation.error, logs: [validation.error ?? ''] })
       throw new Error(validation.error)
     }
     if (this.state.status === 'running' && this.child !== undefined) {
-      return { url: this.state.url ?? DEFAULT_URL }
+      return { url: this.state.url ?? DEFAULT_URL, reused: this.state.reused }
     }
     if (this.state.status === 'starting') {
       return this.waitUntilReady()
     }
+
+    // 预检端口：已有 DSH 实例 → 直接复用（不重复拉起，避免 EADDRINUSE）；
+    // 端口被非 DSH 进程占用 → 明确报错。
+    const preflight = await this.preflight()
+    if (preflight.mode === 'reuse') {
+      this.setState({
+        ...this.state,
+        status: 'running',
+        url: preflight.url,
+        port: portOf(preflight.url),
+        pid: undefined,
+        error: undefined,
+        reused: true,
+        cwd,
+      })
+      this.appendLog(`检测到已有 DSH 实例 ${preflight.url}，直接复用（未重新拉起进程）`)
+      return { url: preflight.url, reused: true }
+    }
+    if (preflight.mode === 'busy') {
+      this.setState({ ...this.state, status: 'failed', error: preflight.error, logs: [preflight.error] })
+      throw new Error(preflight.error)
+    }
+
     this.stop()
 
     this.setState({
@@ -165,6 +196,31 @@ export class LocalServerManager {
 
   // ---- Internals ----
 
+  /**
+   * 检查默认端口（3080，dsh web 的固定监听端口）：
+   * - 端口上已有可用 DSH 实例 → 复用（不重复拉起，避免 EADDRINUSE）
+   * - 端口被非 DSH 进程占用 → 报错（拉起必然失败）
+   * - 端口空闲 → 允许拉起新进程
+   *
+   * 注意：`dsh web` 实际绑定的是 profile 默认端口 3080，与 launcher.json
+   * 的 port 字段无关（那是 dsh-launcher 托盘程序的配置）。
+   */
+  private async preflight(): Promise<
+    { mode: 'reuse'; url: string } | { mode: 'busy'; port: number; error: string } | { mode: 'free'; port: number }
+  > {
+    if (await isPortListening(DEFAULT_PORT)) {
+      if (await this.ping(DEFAULT_URL)) {
+        return { mode: 'reuse', url: DEFAULT_URL }
+      }
+      return {
+        mode: 'busy',
+        port: DEFAULT_PORT,
+        error: `端口 ${DEFAULT_PORT} 已被其他进程占用（不是可用的 DSH 服务）。请先停止占用端口的进程，或在「进入配置」中检查 dsh.localServerPath；若 DSH 正在启动中，请稍后重试。`,
+      }
+    }
+    return { mode: 'free', port: DEFAULT_PORT }
+  }
+
   private async waitUntilReady(): Promise<{ url: string }> {
     const deadline = Date.now() + READY_TIMEOUT_MS
     let detectedUrl: string | undefined
@@ -184,11 +240,18 @@ export class LocalServerManager {
       const urls = tryUrls()
       for (const url of urls) {
         if (await this.ping(url)) {
+          // 只认本进程拉起的实例：spawn 的进程还活着才算就绪，
+          // 避免端口被预先存在的其他实例占用时误判为"拉起成功"。
+          if (this.child === undefined || this.child.exitCode !== null) {
+            this.appendLog(`端口上的服务并非本次启动的进程（本进程已退出），忽略 ${url}`)
+            break
+          }
           this.setState({
             ...this.state,
             status: 'running',
             url,
-            port: Number(new URL(url).port),
+            port: portOf(url),
+            reused: false,
           })
           this.appendLog(`本地服务就绪：${url}`)
           return { url }
@@ -216,7 +279,10 @@ export class LocalServerManager {
   }
 
   private fail(error: string): void {
-    this.setState({ ...this.state, status: 'failed', error })
+    // 附上最近几条日志（如 EADDRINUSE 堆栈首行），方便直接定位原因。
+    const tail = this.state.logs.slice(-4).map((l) => l.trim()).filter((l) => l.length > 0).join('\n')
+    const full = tail.length > 0 ? `${error}\n${tail}` : error
+    this.setState({ ...this.state, status: 'failed', error: full })
   }
 
   private killChild(): void {
@@ -262,4 +328,29 @@ export class LocalServerManager {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** 探测 127.0.0.1:port 是否已有进程监听（不区分是不是 DSH）。 */
+function isPortListening(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = netConnect({ port, host: '127.0.0.1' })
+    const done = (result: boolean): void => {
+      socket.destroy()
+      resolve(result)
+    }
+    socket.setTimeout(800)
+    socket.once('connect', () => done(true))
+    socket.once('timeout', () => done(false))
+    socket.once('error', () => done(false))
+  })
+}
+
+/** 从 base URL 提取端口；解析失败返回 undefined。 */
+function portOf(url: string): number | undefined {
+  try {
+    const port = new URL(url).port
+    return port.length > 0 ? Number(port) : undefined
+  } catch {
+    return undefined
+  }
 }
