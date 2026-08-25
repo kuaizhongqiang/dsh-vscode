@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: https:;">
+<title>DSH 会话</title>
+<style>
+  :root {
+    --bg: var(--vscode-editor-background, #1e1e1e);
+    --fg: var(--vscode-editor-foreground, #d4d4d4);
+    --border: var(--vscode-panel-border, rgba(128,128,128,0.35));
+    --accent: var(--vscode-textLink-foreground, #4daafc);
+    --muted: var(--vscode-descriptionForeground, #9d9d9d);
+    --bubble-user: var(--vscode-editorWidget-background, #252526);
+    --bubble-assistant: var(--vscode-editorWidget-background, #252526);
+    --tool-bg: var(--vscode-textBlockQuote-background, #222);
+    --error: #f48771;
+    --ok: #89d185;
+    --warn: #cca700;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--vscode-font-family, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif);
+    font-size: 13px;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+  header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+    flex: 0 0 auto;
+    background: var(--vscode-editorWidget-background, #252526);
+  }
+  header .title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  header .cwd { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  header .badge {
+    font-size: 11px; padding: 1px 8px; border-radius: 9px;
+    background: rgba(128,128,128,0.18); color: var(--muted);
+    white-space: nowrap;
+  }
+  header .badge.running { background: rgba(137,209,125,0.15); color: var(--ok); }
+  header button {
+    background: transparent; border: 1px solid var(--border); color: var(--fg);
+    border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 12px;
+  }
+  header button:hover { background: rgba(128,128,128,0.15); }
+  header button:disabled { opacity: 0.4; cursor: default; }
+
+  #messages {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 12px 14px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .msg { display: flex; flex-direction: column; gap: 4px; max-width: 100%; }
+  .msg .meta { font-size: 11px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+  .msg .meta .role { font-weight: 600; }
+  .msg.user .meta .role { color: var(--accent); }
+  .msg .label { font-size: 10px; background: rgba(128,128,128,0.2); padding: 0 5px; border-radius: 3px; }
+  .msg .body {
+    background: var(--bubble-assistant);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    line-height: 1.55;
+    white-space: normal;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+  .msg.user .body { background: var(--bubble-user); }
+  .msg .body.streaming::after {
+    content: "▍"; color: var(--accent); animation: blink 1s steps(2) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .body p { margin: 0 0 6px; } .body p:last-child { margin-bottom: 0; }
+  .body h1, .body h2, .body h3, .body h4 { margin: 8px 0 4px; }
+  .body pre {
+    background: var(--tool-bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 10px; overflow-x: auto;
+    font-family: var(--vscode-editor-font-family, Consolas, monospace);
+    font-size: 12px; line-height: 1.45;
+  }
+  .body code {
+    font-family: var(--vscode-editor-font-family, Consolas, monospace);
+    font-size: 12px; background: rgba(128,128,128,0.18);
+    padding: 0 3px; border-radius: 3px;
+  }
+  .body pre code { background: none; padding: 0; }
+  .body a { color: var(--accent); }
+  .body ul, .body ol { margin: 4px 0; padding-left: 22px; }
+  .body blockquote { margin: 4px 0; padding: 2px 10px; border-left: 3px solid var(--border); color: var(--muted); }
+  .body table { border-collapse: collapse; margin: 6px 0; }
+  .body th, .body td { border: 1px solid var(--border); padding: 3px 8px; font-size: 12px; }
+  .body th { background: rgba(128,128,128,0.15); }
+  .body hr { border: none; border-top: 1px solid var(--border); margin: 8px 0; }
+
+  details.reasoning { margin: 4px 0; }
+  details.reasoning summary {
+    cursor: pointer; font-size: 11px; color: var(--muted);
+    user-select: none;
+  }
+  details.reasoning .reasoning-body {
+    margin-top: 4px; padding: 6px 8px; border-left: 2px solid var(--border);
+    color: var(--muted); font-size: 12px; line-height: 1.5;
+    white-space: pre-wrap; word-break: break-word;
+  }
+
+  .tool-card {
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--tool-bg); margin: 2px 0;
+    font-size: 12px;
+  }
+  .tool-card .tool-head {
+    display: flex; align-items: center; gap: 6px; padding: 5px 10px; cursor: pointer;
+    user-select: none;
+  }
+  .tool-card .tool-head .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
+  .tool-card .tool-head .dot.running { background: var(--warn); animation: blink 1s infinite; }
+  .tool-card .tool-head .dot.done { background: var(--ok); }
+  .tool-card .tool-head .dot.error { background: var(--error); }
+  .tool-card .tool-head .tool-name { font-weight: 600; font-family: var(--vscode-editor-font-family, Consolas, monospace); }
+  .tool-card .tool-head .tool-status { color: var(--muted); font-size: 11px; margin-left: auto; }
+  .tool-card .tool-body { padding: 0 10px 8px; display: none; }
+  .tool-card.open .tool-body { display: block; }
+  .tool-card pre {
+    margin: 4px 0 0; padding: 6px 8px; background: rgba(0,0,0,0.25);
+    border-radius: 5px; overflow-x: auto; white-space: pre-wrap; word-break: break-all;
+    font-family: var(--vscode-editor-font-family, Consolas, monospace); font-size: 11.5px;
+    max-height: 220px; overflow-y: auto;
+  }
+  .tool-card .tool-result-label { color: var(--muted); font-size: 11px; margin-top: 6px; }
+
+  .approval {
+    border: 1px solid var(--warn); border-radius: 8px; padding: 8px 12px;
+    background: rgba(204,167,0,0.08); font-size: 12.5px;
+  }
+  .approval .approval-title { font-weight: 600; margin-bottom: 4px; }
+  .approval .approval-tool { font-family: var(--vscode-editor-font-family, Consolas, monospace); }
+  .approval .approval-actions { display: flex; gap: 8px; margin-top: 8px; }
+  .approval button {
+    border: 1px solid var(--border); border-radius: 5px; padding: 4px 14px;
+    cursor: pointer; font-size: 12.5px; color: var(--fg); background: var(--bubble-user);
+  }
+  .approval button.allow { border-color: var(--ok); color: var(--ok); }
+  .approval button.reject { border-color: var(--error); color: var(--error); }
+  .approval button:disabled { opacity: 0.5; cursor: default; }
+  .approval.resolved { border-color: var(--border); background: transparent; opacity: 0.7; }
+
+  .question {
+    border: 1px solid var(--accent); border-radius: 8px; padding: 10px 12px;
+    background: rgba(77,170,252,0.06); font-size: 12.5px;
+  }
+  .question .q { margin: 8px 0 4px; font-weight: 600; }
+  .question .q-detail { color: var(--muted); font-size: 12px; margin: 2px 0 6px; }
+  .question label.opt { display: block; margin: 3px 0; cursor: pointer; }
+  .question input[type=text] {
+    background: var(--bubble-user); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 3px 8px; width: 100%; margin-top: 6px;
+  }
+  .question .q-actions { margin-top: 10px; }
+  .question button {
+    border: 1px solid var(--border); border-radius: 5px; padding: 4px 16px;
+    cursor: pointer; font-size: 12.5px; color: var(--fg); background: var(--bubble-user);
+  }
+  .question button.primary { border-color: var(--accent); color: var(--accent); }
+  .question button:disabled { opacity: 0.5; cursor: default; }
+
+  .status-line { font-size: 11px; color: var(--muted); text-align: center; padding: 2px 0; }
+  .status-line.error { color: var(--error); }
+  .turn-badge {
+    align-self: center; font-size: 10.5px; color: var(--muted);
+    background: rgba(128,128,128,0.12); border-radius: 9px; padding: 1px 10px;
+  }
+
+  #composer {
+    flex: 0 0 auto;
+    border-top: 1px solid var(--border);
+    padding: 8px 10px 10px;
+    display: flex; gap: 8px; align-items: flex-end;
+  }
+  #composer textarea {
+    flex: 1; resize: none; min-height: 38px; max-height: 160px;
+    background: var(--bubble-user); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 7px 9px; font-family: inherit; font-size: 13px; line-height: 1.45;
+    outline: none;
+  }
+  #composer textarea:focus { border-color: var(--accent); }
+  #composer textarea:disabled { opacity: 0.5; }
+  #composer button {
+    border: 1px solid var(--border); border-radius: 6px; padding: 7px 16px;
+    cursor: pointer; font-size: 13px; color: var(--fg); background: var(--bubble-user);
+  }
+  #composer button.send { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  #composer button:disabled { opacity: 0.4; cursor: default; }
+  #composer .hint { font-size: 10.5px; color: var(--muted); }
+  #empty { text-align: center; color: var(--muted); margin-top: 40px; }
+</style>
+</head>
+<body>
+  <header>
+    <span class="title" id="h-title">DSH 会话</span>
+    <span class="cwd" id="h-cwd"></span>
+    <span class="badge" id="h-badge">未连接</span>
+    <button id="btn-open-browser" title="在浏览器打开该会话">$(globe) 浏览器</button>
+    <button id="btn-cancel" title="停止当前回合" disabled>停止</button>
+  </header>
+  <div id="messages">
+    <div class="status-line" id="status-line"></div>
+  </div>
+  <div id="composer">
+    <textarea id="input" rows="1" placeholder="输入消息，Enter 发送，Shift+Enter 换行…（连接后可用）" disabled></textarea>
+    <button class="send" id="btn-send" disabled>发送</button>
+  </div>
+  <div class="hint" style="padding:0 12px 6px" id="hint"></div>
+
+<script>
+(function () {
+  'use strict';
+  var vscode = acquireVsCodeApi();
+  var messagesEl = document.getElementById('messages');
+  var inputEl = document.getElementById('input');
+  var sendBtn = document.getElementById('btn-send');
+  var cancelBtn = document.getElementById('btn-cancel');
+  var statusEl = document.getElementById('status-line');
+  var titleEl = document.getElementById('h-title');
+  var cwdEl = document.getElementById('h-cwd');
+  var badgeEl = document.getElementById('h-badge');
+  var hintEl = document.getElementById('hint');
+  var toolById = {};   // callId -> {el, statusEl, argsPre, resultPre, wrapper}
+  var msgEls = {};     // message id -> {el, textEl, reasoningEl}
+  var msgTexts = {};   // message id -> accumulated text
+  var msgReasoning = {};
+  var nearBottom = true;
+  var lastMessageId = null;
+
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // ---- minimal markdown ----
+  function renderInline(s) {
+    var out = escapeHtml(s);
+    out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
+    out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+    out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>');
+    return out;
+  }
+  function renderMarkdown(src) {
+    if (!src) return '';
+    var fenceRe = /```(\w*)\n([\s\S]*?)```/g;
+    var parts = [];
+    var last = 0; var m;
+    var table = [];
+    while ((m = fenceRe.exec(src)) !== null) {
+      parts.push(renderInline(src.slice(last, m.index)));
+      parts.push('<pre><code>' + escapeHtml(m[2]) + '</code></pre>');
+      last = m.index + m[0].length;
+    }
+    parts.push(renderInline(src.slice(last)));
+    var text = parts.join('');
+    // line-oriented blocks
+    var lines = text.split('\n');
+    var html = [];
+    var inUl = false, inOl = false, inTable = false;
+    function closeList() { if (inUl) { html.push('</ul>'); inUl = false; } if (inOl) { html.push('</ol>'); inOl = false; } }
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      if (/^\s*$/.test(line)) { closeList(); if (inTable) { html.push('</table>'); inTable = false; } continue; }
+      var h = /^(#{1,4})\s+(.*)$/.exec(line);
+      if (h) { closeList(); html.push('<h' + h[1].length + '>' + h[2] + '</h' + h[1].length + '>'); continue; }
+      var hr = /^---+$/.exec(line);
+      if (hr) { closeList(); html.push('<hr>'); continue; }
+      var qt = /^&gt;\s?(.*)$/.exec(line);
+      if (qt) { closeList(); html.push('<blockquote>' + qt[1] + '</blockquote>'); continue; }
+      var ul = /^\s*[-*]\s+(.*)$/.exec(line);
+      if (ul) { if (!inUl) { html.push('<ul>'); inUl = true; } html.push('<li>' + ul[1] + '</li>'); continue; }
+      var ol = /^\s*\d+\.\s+(.*)$/.exec(line);
+      if (ol) { if (!inOl) { html.push('<ol>'); inOl = true; } html.push('<li>' + ol[1] + '</li>'); continue; }
+      var tb = /^\|(.+)\|$/.exec(line);
+      if (tb) {
+        closeList();
+        if (!inTable) { html.push('<table>'); inTable = true; }
+        var cells = tb[1].split('|').map(function (c) { return c.trim(); });
+        var isSep = cells.every(function (c) { return /^:?-{2,}:?$/.test(c); });
+        if (!isSep) {
+          var tag = table.length === 0 ? 'th' : 'td';
+          html.push('<tr>' + cells.map(function (c) { return '<' + tag + '>' + c + '</' + tag + '>'; }).join('') + '</tr>');
+        }
+        table.push(line);
+        continue;
+      }
+      closeList(); if (inTable) { html.push('</table>'); inTable = false; }
+      html.push('<p>' + line + '</p>');
+    }
+    closeList(); if (inTable) { html.push('</table>'); inTable = false; }
+    return html.join('\n');
+  }
+
+  // ---- message rendering ----
+  function el(tag, cls, html) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (html !== undefined) e.innerHTML = html;
+    return e;
+  }
+
+  function renderToolCard(tool) {
+    if (toolById[tool.callId]) {
+      var t = toolById[tool.callId];
+      t.nameEl.textContent = tool.name || t.nameEl.textContent;
+      t.argsPre.textContent = tool.arguments || t.argsPre.textContent;
+      t.dot.className = 'dot ' + tool.status;
+      t.statusEl.textContent = statusText(tool.status);
+      if (tool.result !== undefined) {
+        t.resultPre.textContent = tool.result;
+        if (tool.isError) t.resultPre.style.color = 'var(--error)';
+      }
+      return;
+    }
+    var card = el('div', 'tool-card');
+    var head = el('div', 'tool-head');
+    var dot = el('span', 'dot ' + tool.status);
+    var nameEl = el('span', 'tool-name', escapeHtml(tool.name));
+    var statusEl = el('span', 'tool-status', statusText(tool.status));
+    head.appendChild(dot); head.appendChild(nameEl); head.appendChild(statusEl);
+    var body = el('div', 'tool-body');
+    var argsLabel = el('div', 'tool-result-label', '参数');
+    var argsPre = el('pre');
+    argsPre.textContent = tool.arguments || '';
+    body.appendChild(argsLabel); body.appendChild(argsPre);
+    var resultPre = null;
+    if (tool.result !== undefined) {
+      var resLabel = el('div', 'tool-result-label', tool.isError ? '结果（错误）' : '结果');
+      resultPre = el('pre');
+      resultPre.textContent = tool.result;
+      if (tool.isError) resultPre.style.color = 'var(--error)';
+      body.appendChild(resLabel); body.appendChild(resultPre);
+    }
+    card.appendChild(head); card.appendChild(body);
+    head.addEventListener('click', function () { card.classList.toggle('open'); });
+    toolById[tool.callId] = { el: card, dot: dot, nameEl: nameEl, statusEl: statusEl, argsPre: argsPre, resultPre: resultPre, wrapper: null };
+    // place after the owning message, else at the end
+    var anchor = tool.messageId ? msgEls[tool.messageId] : null;
+    if (anchor && anchor.el && anchor.el.nextSibling) {
+      messagesEl.insertBefore(card, anchor.el.nextSibling);
+    } else {
+      messagesEl.appendChild(card);
+    }
+  }
+
+  function statusText(s) {
+    if (s === 'done') return '完成';
+    if (s === 'error') return '出错';
+    if (s === 'running') return '执行中…';
+    return '等待中…';
+  }
+
+  function renderMessage(msg) {
+    var existing = msgEls[msg.id];
+    if (existing) {
+      existing.el.remove();
+      delete msgEls[msg.id];
+    }
+    var wrap = el('div', 'msg ' + msg.role);
+    var meta = el('div', 'meta');
+    var role = el('span', 'role', msg.role === 'user' ? '你' : 'DSH');
+    meta.appendChild(role);
+    if (msg.label) meta.appendChild(el('span', 'label', escapeHtml(msg.label)));
+    var time = new Date(msg.time).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    meta.appendChild(el('span', '', time));
+    wrap.appendChild(meta);
+
+    var body = el('div', 'body');
+    var textEl = el('div');
+    var accumulated = msgTexts[msg.id] !== undefined ? msgTexts[msg.id] : msg.text;
+    textEl.innerHTML = renderMarkdown(accumulated);
+    body.appendChild(textEl);
+    if (msg.reasoning) {
+      var det = el('details', 'reasoning');
+      det.open = msg.streaming ? false : false;
+      var sum = el('summary', '', msg.streaming ? '思考中…' : '思考过程');
+      var rb = el('div', 'reasoning-body');
+      rb.textContent = msgReasoning[msg.id] !== undefined ? msgReasoning[msg.id] : msg.reasoning;
+      det.appendChild(sum); det.appendChild(rb);
+      body.appendChild(det);
+    }
+    if (msg.streaming) body.classList.add('streaming');
+    if (msg.interrupted) {
+      body.appendChild(el('div', 'tool-result-label', '（已中断）'));
+    }
+    wrap.appendChild(body);
+    // tool calls inside this message
+    (msg.toolCalls || []).forEach(function (tool) {
+      renderToolCard(Object.assign({}, tool, { messageId: msg.id }));
+    });
+    messagesEl.appendChild(wrap);
+    msgEls[msg.id] = { el: wrap, textEl: textEl, bodyEl: body, reasoningEl: null };
+    lastMessageId = msg.id;
+    scrollBottom();
+  }
+
+  function scrollBottom() {
+    if (nearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+  messagesEl.addEventListener('scroll', function () {
+    nearBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 60;
+  });
+
+  function setStatus(text, isError) {
+    statusEl.textContent = text;
+    statusEl.className = 'status-line' + (isError ? ' error' : '');
+  }
+
+  function setConnected(connected, text) {
+    badgeEl.textContent = text;
+    badgeEl.className = 'badge' + (connected ? ' running' : '');
+    inputEl.disabled = !connected;
+    sendBtn.disabled = !connected;
+    cancelBtn.disabled = !connected;
+  }
+
+  // ---- ops from the host ----
+  function handleOp(op) {
+    switch (op.type) {
+      case 'init': {
+        if (op.title) titleEl.textContent = op.title;
+        if (op.cwd) cwdEl.textContent = op.cwd;
+        setConnected(op.running, op.running ? '运行中' : '已连接');
+        messagesEl.querySelectorAll('.msg, .tool-card, .approval, .question, .turn-badge').forEach(function (e) { e.remove(); });
+        (op.messages || []).forEach(renderMessage);
+        break;
+      }
+      case 'append-message':
+        renderMessage(op.message);
+        break;
+      case 'stream-text': {
+        msgTexts[op.id] = (msgTexts[op.id] || '') + op.text;
+        var m = msgEls[op.id];
+        if (m) m.textEl.innerHTML = renderMarkdown(msgTexts[op.id]);
+        scrollBottom();
+        break;
+      }
+      case 'stream-reasoning': {
+        msgReasoning[op.id] = (msgReasoning[op.id] || '') + op.text;
+        var m2 = msgEls[op.id];
+        var det = m2 && m2.el.querySelector('details.reasoning');
+        if (!det && m2) {
+          det = el('details', 'reasoning');
+          det.appendChild(el('summary', '', '思考中…'));
+          det.appendChild(el('div', 'reasoning-body'));
+          m2.bodyEl.appendChild(det);
+        }
+        if (det) det.querySelector('.reasoning-body').textContent = msgReasoning[op.id];
+        scrollBottom();
+        break;
+      }
+      case 'finalize-message': {
+        msgTexts[op.id] = op.message.text;
+        msgReasoning[op.id] = op.message.reasoning || '';
+        renderMessage(op.message);
+        break;
+      }
+      case 'tool-call':
+        renderToolCard(op.tool);
+        break;
+      case 'tool-result': {
+        var t = toolById[op.callId];
+        if (t) {
+          t.dot.className = 'dot ' + (op.isError ? 'error' : 'done');
+          t.statusEl.textContent = op.isError ? '出错' : '完成';
+          if (!t.resultPre) {
+            var resLabel = el('div', 'tool-result-label', op.isError ? '结果（错误）' : '结果');
+            t.resultPre = el('pre');
+            if (op.isError) t.resultPre.style.color = 'var(--error)';
+            t.el.querySelector('.tool-body').appendChild(resLabel);
+            t.el.querySelector('.tool-body').appendChild(t.resultPre);
+          }
+          t.resultPre.textContent = op.result;
+        }
+        break;
+      }
+      case 'approval': {
+        var box = el('div', 'approval');
+        box.id = 'approval-' + op.approvalId;
+        box.appendChild(el('div', 'approval-title', '⚠ 需要审批'));
+        box.appendChild(el('div', '', '工具 <span class="approval-tool">' + escapeHtml(op.toolName) + '</span>' +
+          (op.reason ? '：' + escapeHtml(op.reason) : ' 请求执行')));
+        var actions = el('div', 'approval-actions');
+        var allow = el('button', 'allow', '允许一次');
+        var reject = el('button', 'reject', '拒绝');
+        allow.addEventListener('click', function () { post({ type: 'approve', rpcId: op.rpcId, approvalId: op.approvalId }); });
+        reject.addEventListener('click', function () { post({ type: 'reject', rpcId: op.rpcId, approvalId: op.approvalId }); });
+        actions.appendChild(allow); actions.appendChild(reject);
+        box.appendChild(actions);
+        messagesEl.appendChild(box);
+        scrollBottom();
+        break;
+      }
+      case 'approval-resolved': {
+        var ab = document.getElementById('approval-' + op.approvalId);
+        if (ab) {
+          ab.classList.add('resolved');
+          ab.querySelector('.approval-title').textContent =
+            op.outcome === 'allowed-once' ? '✓ 已允许' : '✕ 已拒绝';
+          ab.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
+        }
+        break;
+      }
+      case 'question': {
+        var qbox = el('div', 'question');
+        qbox.id = 'question-' + op.rpcId;
+        qbox.appendChild(el('div', 'approval-title', '❓ 需要你的回答'));
+        var answers = {};
+        op.questions.forEach(function (q) {
+          if (q.header) qbox.appendChild(el('div', 'q', escapeHtml(q.header)));
+          qbox.appendChild(el('div', 'q', escapeHtml(q.question)));
+          if (q.detail) qbox.appendChild(el('div', 'q-detail', escapeHtml(q.detail)));
+          var group = q.id;
+          answers[group] = { selected: [], custom: null };
+          (q.options || []).forEach(function (opt) {
+            var label = el('label', 'opt');
+            var input = document.createElement('input');
+            input.type = q.multiSelect ? 'checkbox' : 'radio';
+            input.name = 'q-' + group;
+            input.value = opt.label;
+            input.addEventListener('change', function () {
+              if (q.multiSelect) {
+                if (input.checked) answers[group].selected.push(opt.label);
+                else answers[group].selected = answers[group].selected.filter(function (s) { return s !== opt.label; });
+              } else {
+                answers[group].selected = input.checked ? [opt.label] : [];
+              }
+            });
+            label.appendChild(input);
+            label.appendChild(document.createTextNode(' ' + opt.label + (opt.description ? '（' + opt.description + '）' : '')));
+            qbox.appendChild(label);
+          });
+          var custom = el('input');
+          custom.type = 'text';
+          custom.placeholder = '其他回答（可选）';
+          custom.addEventListener('input', function () { answers[group].custom = custom.value || null; });
+          qbox.appendChild(custom);
+        });
+        var qActions = el('div', 'q-actions');
+        var submit = el('button', 'primary', '提交回答');
+        submit.addEventListener('click', function () {
+          var list = [];
+          Object.keys(answers).forEach(function (id) {
+            var a = answers[id];
+            if (a.selected.length > 0 || a.custom) {
+              list.push({ id: id, selected: a.selected, custom: a.custom || undefined });
+            }
+          });
+          post({ type: 'answer', rpcId: op.rpcId, answers: list });
+          submit.disabled = true; submit.textContent = '已提交';
+        });
+        qActions.appendChild(submit);
+        qbox.appendChild(qActions);
+        messagesEl.appendChild(qbox);
+        scrollBottom();
+        break;
+      }
+      case 'question-resolved': {
+        var qb = document.getElementById('question-' + op.questionRpcId);
+        if (qb) {
+          qb.classList.add('resolved');
+          qb.querySelector('.approval-title').textContent =
+            op.outcome === 'answered' ? '✓ 已回答' : '已取消';
+          qb.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
+        }
+        break;
+      }
+      case 'turn-end': {
+        var badge = el('div', 'turn-badge', '第 ' + op.turn + ' 轮结束（' + reasonText(op.reasonKind) + '）');
+        messagesEl.appendChild(badge);
+        scrollBottom();
+        break;
+      }
+      case 'title':
+        titleEl.textContent = op.title;
+        break;
+      case 'status':
+        setStatus(op.text, false);
+        break;
+      case 'error':
+        setStatus(op.text, true);
+        break;
+    }
+  }
+
+  function reasonText(kind) {
+    var map = { completed: '完成', aborted: '已停止', rejected: '已拒绝', error: '出错', 'max-tokens': '达到上限' };
+    return map[kind] || kind;
+  }
+
+  function post(req) { vscode.postMessage(req); }
+
+  // ---- input ----
+  inputEl.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  });
+  inputEl.addEventListener('input', function () {
+    inputEl.style.height = 'auto';
+    inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
+  });
+  function send() {
+    var text = inputEl.value.trim();
+    if (!text) return;
+    inputEl.value = '';
+    inputEl.style.height = 'auto';
+    post({ type: 'prompt', text: text });
+  }
+  sendBtn.addEventListener('click', send);
+  cancelBtn.addEventListener('click', function () { post({ type: 'cancel' }); });
+  document.getElementById('btn-open-browser').addEventListener('click', function () { post({ type: 'open-in-browser' }); });
+
+  window.addEventListener('message', function (event) {
+    var msg = event.data;
+    if (msg && msg.type) handleOp(msg);
+  });
+
+  post({ type: 'ready' });
+})();
+</script>
+</body>
+</html>

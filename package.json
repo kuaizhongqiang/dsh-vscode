@@ -1,0 +1,219 @@
+{
+  "name": "dsh-vscode",
+  "displayName": "DSH - DeepSeek Harness",
+  "description": "在 VSCode 中连接 DeepSeek Harness（DSH）实例：会话列表、流式聊天、工具调用、审批与提问处理。",
+  "version": "0.1.0",
+  "publisher": "kuaizhongqiang",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kuaizhongqiang/dsh-vscode.git"
+  },
+  "engines": {
+    "vscode": "^1.90.0",
+    "node": ">=20"
+  },
+  "categories": [
+    "Other",
+    "AI"
+  ],
+  "keywords": [
+    "dsh",
+    "deepseek",
+    "harness",
+    "agent",
+    "ai"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished",
+    "onView:dsh.sessions"
+  ],
+  "contributes": {
+    "configuration": {
+      "title": "DSH",
+      "properties": {
+        "dsh.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:3080",
+          "description": "DeepSeek Harness 服务地址（dsh web 的监听地址），例如 http://127.0.0.1:3080 或 https://dsh.example.com。"
+        },
+        "dsh.autoConnect": {
+          "type": "boolean",
+          "default": true,
+          "description": "VSCode 启动后自动连接 DSH 实例。"
+        },
+        "dsh.autoAttachWorkspace": {
+          "type": "boolean",
+          "default": true,
+          "description": "打开文件夹时自动在 DSH 中创建/关联同名工作区，新会话默认使用该工作区目录。"
+        },
+        "dsh.defaultAgentPreset": {
+          "type": "string",
+          "default": "standard",
+          "description": "新建会话使用的 agent preset（需 DSH 实例已配置该 preset）。"
+        },
+        "dsh.historyPageSize": {
+          "type": "number",
+          "default": 40,
+          "minimum": 5,
+          "maximum": 200,
+          "description": "打开会话历史时一次拉取的 message 数量。"
+        },
+        "dsh.reconnectIntervalMs": {
+          "type": "number",
+          "default": 3000,
+          "minimum": 1000,
+          "description": "事件流断开后的自动重连间隔（毫秒）。"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "dsh.connect",
+        "title": "DSH: 连接",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "dsh.disconnect",
+        "title": "DSH: 断开连接",
+        "icon": "$(debug-disconnect)"
+      },
+      {
+        "command": "dsh.openChat",
+        "title": "DSH: 打开聊天",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "dsh.newSession",
+        "title": "DSH: 新建会话",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "dsh.refreshSessions",
+        "title": "DSH: 刷新会话列表",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "dsh.openInBrowser",
+        "title": "DSH: 在浏览器打开",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "dsh.cancel",
+        "title": "DSH: 停止当前回合",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "dsh.renameSession",
+        "title": "DSH: 重命名会话",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "dsh.showOutput",
+        "title": "DSH: 显示输出日志",
+        "icon": "$(output)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "dsh",
+          "title": "DSH",
+          "icon": "media/dsh-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "dsh": [
+        {
+          "id": "dsh.sessions",
+          "name": "会话",
+          "icon": "media/dsh-icon.svg"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "dsh.newSession",
+          "when": "view == dsh.sessions",
+          "group": "navigation@1"
+        },
+        {
+          "command": "dsh.refreshSessions",
+          "when": "view == dsh.sessions",
+          "group": "navigation@2"
+        },
+        {
+          "command": "dsh.connect",
+          "when": "view == dsh.sessions && !dsh.connected",
+          "group": "navigation@3"
+        },
+        {
+          "command": "dsh.disconnect",
+          "when": "view == dsh.sessions && dsh.connected",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "dsh.openChat",
+          "when": "view == dsh.sessions && viewItem == dsh-session",
+          "group": "inline@1"
+        },
+        {
+          "command": "dsh.openInBrowser",
+          "when": "view == dsh.sessions && viewItem == dsh-session",
+          "group": "inline@2"
+        },
+        {
+          "command": "dsh.renameSession",
+          "when": "view == dsh.sessions && viewItem == dsh-session",
+          "group": "inline@3"
+        },
+        {
+          "command": "dsh.cancel",
+          "when": "view == dsh.sessions && viewItem == dsh-session",
+          "group": "inline@4"
+        },
+        {
+          "command": "dsh.openChat",
+          "when": "view == dsh.sessions && viewItem == dsh-workspace",
+          "group": "inline@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "dsh.connect",
+          "when": "!dsh.connected"
+        },
+        {
+          "command": "dsh.disconnect",
+          "when": "dsh.connected"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "dsh.openChat",
+        "key": "ctrl+alt+d",
+        "mac": "cmd+alt+d"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "package": "vsce package --no-dependencies",
+    "vscode:prepublish": "node esbuild.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  }
+}
