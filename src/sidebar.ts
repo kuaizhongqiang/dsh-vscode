@@ -339,7 +339,7 @@ export class SessionsTreeProvider implements vscode.TreeDataProvider<TreeNode> {
       nodes.push({ kind: 'status', text: state.error, icon: 'warning', error: true })
     }
     if (this.ctx.getConfigValue('localServerPath') === '') {
-      nodes.push({ kind: 'status', text: '未配置本地服务目录', icon: 'info', description: '在「进入配置」中填写 dsh.localServerPath 后可一键启动', error: false })
+      nodes.push({ kind: 'status', text: '未配置本地服务目录', icon: 'info', description: '在「进入配置」中填写 dsh.localServerPath（应包含 dsh 启动器的目录，如 D:\\dsh 或 ~/dsh）', error: false })
     }
     if (state.status === 'running' || state.status === 'starting') {
       nodes.push({ kind: 'action', id: 'dsh.stopLocalService', title: '停止服务', icon: 'debug-stop', contextValue: 'dsh-action' })
@@ -592,8 +592,9 @@ function sessionTreeItem(session: StoredSession): vscode.TreeItem {
     session.running ? new vscode.ThemeColor('charts.blue') : undefined,
   )
   const stats: string[] = []
-  if (session.running) stats.push('运行中')
+  if (session.running) stats.push('● 运行中')
   if (session.turns !== undefined) stats.push(`${session.turns} 轮`)
+  stats.push(relativeTime(session.updatedAt))
   item.description = stats.join(' · ')
   item.tooltip = new vscode.MarkdownString(
     [
@@ -603,10 +604,19 @@ function sessionTreeItem(session: StoredSession): vscode.TreeItem {
       `- 目录: \`${session.cwd}\``,
       `- preset: \`${session.agentPreset}\``,
       session.running ? '- 状态: 🔄 运行中' : '- 状态: 空闲',
+      `- 更新: ${new Date(session.updatedAt).toLocaleString()}`,
     ].join('\n'),
   )
   item.contextValue = 'dsh-session'
   return item
+}
+
+function relativeTime(ts: number): string {
+  const diff = Date.now() - ts
+  if (diff < 60000) return '刚刚'
+  if (diff < 3600000) return `${Math.floor(diff / 60000)} 分钟前`
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时前`
+  return `${Math.floor(diff / 86400000)} 天前`
 }
 
 function logItem(element: Extract<TreeNode, { kind: 'log' }>): vscode.TreeItem {

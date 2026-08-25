@@ -15,7 +15,7 @@ import { StatusBar } from './statusBar.ts'
 import { ChatPanel, errorMessage } from './chat/chatPanel.ts'
 import type { SessionStatsView } from './chat/types.ts'
 import { onConfigChanged, readConfig, sessionWebUrl, type DshConfig } from './config.ts'
-import { LocalServerManager } from './localServer.ts'
+import { LocalServerManager, validateLocalServerPath } from './localServer.ts'
 import { scanInstalledPlugins, scanAvailablePlugins, dshHome } from './plugins.ts'
 import type { AgentPresetEntry, SessionId, WorkspaceId } from './client/types.ts'
 
@@ -626,10 +626,16 @@ class DshExtension {
             canSelectFiles: false,
             canSelectFolders: true,
             canSelectMany: false,
-            title: '选择本地 DSH 服务目录（dsh 安装 / 启动目录）',
+            title: '选择本地 DSH 服务目录（应包含 dsh / dsh.cmd 启动器）',
           })
           if (picked !== undefined && picked.length > 0) {
-            await config.update(key, picked[0].fsPath, vscode.ConfigurationTarget.Global)
+            const chosen = picked[0].fsPath
+            const validation = validateLocalServerPath(chosen)
+            if (!validation.ok) {
+              void vscode.window.showErrorMessage(`本地服务路径校验失败：${validation.error}`, { modal: false }, '打开目录')
+              return
+            }
+            await config.update(key, chosen, vscode.ConfigurationTarget.Global)
           }
           return
         }

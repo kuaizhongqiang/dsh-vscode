@@ -2,7 +2,7 @@
   "name": "dsh-vscode",
   "displayName": "DSH - DeepSeek Harness",
   "description": "在 VSCode 中连接 DeepSeek Harness（DSH）实例：会话列表、流式聊天、工具调用、审批与提问处理。",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "publisher": "kuaizhongqiang",
   "license": "MIT",
   "icon": "media/dsh-icon.png",
@@ -106,7 +106,7 @@
         "dsh.localServerPath": {
           "type": "string",
           "default": "",
-          "description": "本地模式下 dsh 安装 / 启动目录；配置后 VSCode 启动（或点击连接）会自动拉起 `dsh web`（cwd=该目录）并轮询就绪后连接，退出时自动终止服务进程。"
+          "description": "本地模式下 dsh 安装 / 启动目录（即运行 `dsh web` 时所在的目录，应包含 dsh 启动器 dsh.cmd / dsh / dsh-launcher.exe）。样例：Windows `D:\\dsh`，macOS/Linux `~/dsh`。配置后 VSCode 启动（或点击连接）会自动拉起 `dsh web`（cwd=该目录）并轮询就绪后连接，退出时自动终止服务进程；设置时会校验路径存在、是目录且含启动器。"
         }
       }
     },
