@@ -44,6 +44,14 @@ export interface SessionStatsView {
   contextWindow?: number
 }
 
+/** @ 提及候选：会话 cwd / 当前工作区下的一个文件或文件夹。 */
+export interface FileCandidate {
+  name: string
+  /** 相对 cwd 的展示路径（目录以 / 结尾）。 */
+  path: string
+  isDir: boolean
+}
+
 export type HostToWebviewOp =
   | { type: 'init'; sessionId: string; title?: string; cwd?: string; running: boolean; messages: RenderMessage[]; showReasoning: boolean }
   | { type: 'connection'; connected: boolean }
@@ -64,6 +72,7 @@ export type HostToWebviewOp =
   | { type: 'title'; title: string }
   | { type: 'status'; text: string }
   | { type: 'error'; text: string }
+  | { type: 'file-candidates'; candidates: FileCandidate[] }
 
 export type WebviewToHostRequest =
   | { type: 'ready' }
@@ -74,6 +83,7 @@ export type WebviewToHostRequest =
   | { type: 'answer'; rpcId: string; answers: { id: string; selected: string[]; custom?: string }[] }
   | { type: 'model-change'; provider: string; model: string }
   | { type: 'open-in-browser' }
+  | { type: 'file-pick'; query: string }
 
 /** Default truncation cap for tool results before shipping to the webview. */
 export const MAX_TOOL_RESULT_CHARS = 4000

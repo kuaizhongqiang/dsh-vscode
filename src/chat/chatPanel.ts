@@ -6,10 +6,11 @@
 
 import * as vscode from 'vscode'
 import { readFileSync } from 'node:fs'
+import { readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { DshConnection, DshEvent } from '../client/connection.ts'
 import { ChatModel } from './chatModel.ts'
-import type { HostToWebviewOp, SessionStatsView, WebviewToHostRequest } from './types.ts'
+import type { FileCandidate, HostToWebviewOp, SessionStatsView, WebviewToHostRequest } from './types.ts'
 import { sessionWebUrl } from '../config.ts'
 
 export interface ChatPanelContext {
@@ -250,6 +251,26 @@ export class ChatPanel {
       case 'open-in-browser':
         void vscode.env.openExternal(vscode.Uri.parse(sessionWebUrl(this.context.connection.baseUrl, this.sessionId)))
         break
+      case 'file-pick':
+        void this.pickFiles(message.query)
+        break
+    }
+  }
+
+  /** @ 提及：扫描会话 cwd 下的一级条目（目录优先），供输入区候选。 */
+  private async pickFiles(query: string): Promise<void> {
+    const cwd = this.context.cwd && this.context.cwd.length > 0
+      ? this.context.cwd
+      : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+    if (cwd === undefined) {
+      this.postOp({ type: 'file-candidates', candidates: [] })
+      return
+    }
+    try {
+      const candidates = scanCandidates(cwd, query)
+      this.postOp({ type: 'file-candidates', candidates })
+    } catch {
+      this.postOp({ type: 'file-candidates', candidates: [] })
     }
   }
 
@@ -337,4 +358,29 @@ export function errorMessage(error: unknown): string {
 
 function numberOr(value: unknown, fallback: number | undefined): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+const MAX_CANDIDATES = 40
+const HIDDEN_PREFIXES = ['.', 'node_modules']
+
+/** 扫描目录一级条目为 @ 候选：目录在前、名称前缀匹配 query、跳过隐藏项。 */
+function scanCandidates(cwd: string, query: string): FileCandidate[] {
+  const q = query.trim().toLowerCase()
+  const entries = readdirSync(cwd, { withFileTypes: true })
+  const out: FileCandidate[] = []
+  for (const entry of entries) {
+    if (HIDDEN_PREFIXES.some((prefix) => entry.name.startsWith(prefix))) continue
+    if (q.length > 0 && !entry.name.toLowerCase().includes(q)) continue
+    let isDir = entry.isDirectory()
+    if (!isDir && entry.isSymbolicLink()) {
+      try {
+        isDir = statSync(join(cwd, entry.name)).isDirectory()
+      } catch {
+        continue
+      }
+    }
+    out.push({ name: entry.name, path: isDir ? `${entry.name}/` : entry.name, isDir })
+    if (out.length >= MAX_CANDIDATES) break
+  }
+  return out.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1))
 }

@@ -6,9 +6,43 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process'
+import { existsSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 import { DshRpcClient } from './client/rpc.ts'
 
 export type LocalServiceStatus = 'stopped' | 'starting' | 'running' | 'failed'
+
+export interface ValidateResult {
+  ok: boolean
+  /** 校验失败时的中文原因（ok=false 时）。 */
+  error?: string
+}
+
+/**
+ * 校验本地服务路径（dsh.localServerPath）：应是一个目录，且包含 dsh 启动器
+ * （dsh / dsh.cmd / dsh.exe / dsh-launcher.exe / launcher.json）。
+ */
+export function validateLocalServerPath(path: string): ValidateResult {
+  const trimmed = (path ?? '').trim()
+  if (trimmed.length === 0) {
+    return { ok: false, error: '路径为空' }
+  }
+  if (!existsSync(trimmed)) {
+    return { ok: false, error: `路径不存在：${trimmed}` }
+  }
+  if (!statSync(trimmed).isDirectory()) {
+    return { ok: false, error: `不是目录（应为 dsh 安装根目录，而不是某个文件）：${trimmed}` }
+  }
+  const launchers = ['dsh', 'dsh.cmd', 'dsh.exe', 'dsh-launcher.exe', 'launcher.json']
+  const found = launchers.some((name) => existsSync(join(trimmed, name)))
+  if (!found) {
+    return {
+      ok: false,
+      error: `目录中未找到 dsh 启动器（${launchers.join(' / ')}）。请选择 dsh 安装根目录，例如 Windows 的 D:\\dsh 或 macOS/Linux 的 ~/dsh（即运行 \`dsh web\` 时所在的目录，而不是 dsh 数据目录或 node_modules）。`,
+    }
+  }
+  return { ok: true }
+}
 
 export interface LocalServiceState {
   status: LocalServiceStatus
@@ -58,6 +92,11 @@ export class LocalServerManager {
    * RPC. Resolves with the ready base URL. Rejects on spawn failure / timeout.
    */
   async start(cwd: string): Promise<{ url: string }> {
+    const validation = validateLocalServerPath(cwd)
+    if (!validation.ok) {
+      this.setState({ ...this.state, status: 'failed', error: validation.error, logs: [validation.error ?? ''] })
+      throw new Error(validation.error)
+    }
     if (this.state.status === 'running' && this.child !== undefined) {
       return { url: this.state.url ?? DEFAULT_URL }
     }
