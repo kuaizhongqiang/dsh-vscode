@@ -139,4 +139,53 @@ describe('ChatModel', () => {
     expect(messages[1]?.text).toBe('answer')
     model.dispose()
   })
+
+  it('tracks the todo list from todo/write events (issue #16)', async () => {
+    const { model, ops, pushLive } = makeModel([])
+    await model.load(40)
+    pushLive(event(30, 'todo/write', { todos: [
+      { content: 'a', status: 'in_progress' },
+      { content: 'b', status: 'pending' },
+      { content: 'c', status: 'completed' },
+      { content: '', status: 'pending' }, // invalid entries are dropped
+      { content: 'weird', status: 'unknown-status' }, // normalized to pending
+    ] }))
+    const todosOp = ops.find((op) => (op as { type: string }).type === 'todos') as { todos: { content: string; status: string }[] }
+    expect(todosOp.todos).toEqual([
+      { content: 'a', status: 'in_progress' },
+      { content: 'b', status: 'pending' },
+      { content: 'c', status: 'completed' },
+      { content: 'weird', status: 'pending' },
+    ])
+    expect(model.todosSnapshot()).toHaveLength(4)
+    model.dispose()
+  })
+
+  it('projects goal/change events and clears on goal/change clear (issue #16)', async () => {
+    const { model, ops, pushLive } = makeModel([])
+    await model.load(40)
+    pushLive(event(40, 'goal/change', {
+      kind: 'goal/change', version: 1, operation: 'create',
+      goal: { id: 'g1', revision: 1, objective: '完成任务', phase: 'active', maxGoalRounds: 5 },
+      roundsStarted: 1, createdAt: 100, updatedAt: 100,
+    }))
+    const goalOp = ops.find((op) => (op as { type: string }).type === 'goal') as { goal: { objective: string; phase: string; roundsStarted: number } }
+    expect(goalOp.goal).toMatchObject({ objective: '完成任务', phase: 'active', roundsStarted: 1 })
+    expect(model.goalSnapshot()?.maxGoalRounds).toBe(5)
+
+    pushLive(event(41, 'goal/change', {
+      kind: 'goal/change', version: 1, operation: 'block',
+      goal: { id: 'g1', revision: 2, objective: '完成任务', phase: 'blocked', maxGoalRounds: 5,
+        blockedReason: { code: 'hard-blocker', message: '外部依赖缺失' } },
+      roundsStarted: 2, createdAt: 100, updatedAt: 200,
+    }))
+    expect(model.goalSnapshot()?.phase).toBe('blocked')
+    expect(model.goalSnapshot()?.blockedReason?.message).toBe('外部依赖缺失')
+
+    pushLive(event(42, 'goal/change', { kind: 'goal/change', version: 1, operation: 'clear', cleared: { id: 'g1', revision: 3 }, clearedAt: 300 }))
+    expect(model.goalSnapshot()).toBeNull()
+    const lastGoalOp = ops.filter((op) => (op as { type: string }).type === 'goal').pop() as { goal: unknown }
+    expect(lastGoalOp.goal).toBeNull()
+    model.dispose()
+  })
 })

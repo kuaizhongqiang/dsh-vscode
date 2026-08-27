@@ -115,6 +115,30 @@ describe('DshRpcClient.respond', () => {
     await client.respond('rpc-1', { sessionId: 's1', approvalId: 'a1', outcome: 'allowed-once' })
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
+
+  it('throws RpcErrorResult when the server rejects the receipt (issue #16: silent swallow)', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ accepted: false, reason: 'not-pending' }))
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new DshRpcClient('http://127.0.0.1:3080')
+    await expect(client.respond('rpc-1', { sessionId: 's1' })).rejects.toMatchObject({
+      code: 'RESPONSE_REJECTED',
+      message: expect.stringContaining('not-pending'),
+    })
+  })
+
+  it('throws RpcErrorResult for bad-response receipts', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ accepted: false, reason: 'bad-response' }))
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new DshRpcClient('http://127.0.0.1:3080')
+    await expect(client.respond('rpc-2', {})).rejects.toMatchObject({ code: 'RESPONSE_REJECTED' })
+  })
+
+  it('tolerates a missing/non-JSON receipt (older server) without throwing', async () => {
+    const fetchMock = vi.fn(async () => new Response('ok', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new DshRpcClient('http://127.0.0.1:3080')
+    await expect(client.respond('rpc-3', {})).resolves.toBeUndefined()
+  })
 })
 
 describe('RpcErrorResult', () => {

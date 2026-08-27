@@ -112,6 +112,12 @@ export class DshRpcClient {
   /**
    * Answer a server-request (approval / question). `rpcId` must echo the
    * frame's rpcId; `value` is the domain response payload.
+   *
+   * The server answers with a receipt `{ accepted: true } | { accepted: false,
+   * reason: 'not-pending' | 'bad-response' }`. A rejected receipt (e.g. the
+   * request already timed out or was answered by another client) is surfaced as
+   * an error — silently swallowing it leaves the agent waiting forever with no
+   * feedback (issue #16).
    */
   async respond(rpcId: string, value: unknown): Promise<void> {
     const message: ClientResponse = {
@@ -132,6 +138,21 @@ export class DshRpcClient {
     }
     if (!response.ok) {
       throw new DshTransportError(`应答送达失败：HTTP ${response.status}`)
+    }
+    try {
+      const receipt = (await response.json()) as { accepted?: boolean; reason?: string }
+      if (receipt?.accepted === false) {
+        const reason = receipt.reason ?? 'unknown'
+        const hint = reason === 'not-pending'
+          ? '请求已不存在（可能已超时、已被取消，或已被其他端处理）'
+          : reason === 'bad-response'
+            ? '应答内容未被接受'
+            : '未知原因'
+        throw new RpcErrorResult('RESPONSE_REJECTED', `DSH 拒绝该应答：${hint}（${reason}）`, { reason })
+      }
+    } catch (error) {
+      if (error instanceof RpcErrorResult) throw error
+      // 回执缺失或非 JSON：保持兼容（老版本服务端），不阻断应答送达。
     }
   }
 }

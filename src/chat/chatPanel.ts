@@ -10,7 +10,7 @@ import { basename, join } from 'node:path'
 import type { DshConnection, DshEvent } from '../client/connection.ts'
 import { ChatModel } from './chatModel.ts'
 import type { FileCandidate, HostToWebviewOp, PromptImage, SessionStatsView, WebviewToHostRequest } from './types.ts'
-import { sessionWebUrl } from '../config.ts'
+import { computeCostCny, sessionWebUrl, type PricingTable } from '../config.ts'
 
 export interface ChatPanelContext {
   extensionUri: vscode.Uri
@@ -24,6 +24,8 @@ export interface ChatPanelContext {
   maxToolResultChars: number
   /** 打开面板时的初始用量统计（来自 store 里的投影快照）。 */
   initialStats?: SessionStatsView
+  /** 按模型 id 的单价表（¥/1M tokens），用于用量栏费用估算。 */
+  pricing?: PricingTable
   onTitleChanged?: (title: string) => void
   onStateChanged?: () => void
 }
@@ -57,6 +59,7 @@ export class ChatPanel {
   private title: string | undefined
   private running: boolean
   private stats: SessionStatsView = {}
+  private currentModel: { provider: string; model: string; reasoningEffort?: string } | undefined
 
   private constructor(context: ChatPanelContext) {
     this.context = context
@@ -215,6 +218,8 @@ export class ChatPanel {
           cwd: this.context.cwd,
           running: this.running,
           messages: this.model.snapshot(),
+          todos: this.model.todosSnapshot(),
+          goal: this.model.goalSnapshot(),
           showReasoning: this.context.showReasoning,
         })
         this.flushPending()
@@ -354,6 +359,7 @@ export class ChatPanel {
         cacheReadTokens: numberOr(record.cacheReadTokens, this.stats.cacheReadTokens),
         cacheWriteTokens: numberOr(record.cacheWriteTokens, this.stats.cacheWriteTokens),
       }
+      this.stats.costCny = this.estimateCostCny(this.stats)
     } else if (key === 'contextPressure') {
       this.stats = {
         ...this.stats,
@@ -377,6 +383,7 @@ export class ChatPanel {
   private async loadModels(): Promise<void> {
     try {
       const models = await this.context.connection.models(this.sessionId)
+      this.currentModel = models.current ?? undefined
       this.postOp({
         type: 'models',
         current: models.current,
@@ -384,10 +391,31 @@ export class ChatPanel {
         groups: models.groups,
         failures: models.failures,
       })
+      // 模型目录到达后按当前模型重新估算费用（tokenUsage 投影可能先到）。
+      this.postOp({ type: 'stats', stats: this.refreshCost(this.stats) })
     } catch (error) {
       // Model catalog is advisory; a failure must not block chat.
       this.postOp({ type: 'status', text: `模型目录加载失败：${errorMessage(error)}` })
     }
+  }
+
+  /** 按当前会话模型官方价估算累计费用（¥）；模型/价格未知时不显示。 */
+  private estimateCostCny(stats: SessionStatsView): number | undefined {
+    const price = this.currentModel !== undefined
+      ? this.context.pricing?.[this.currentModel.model]
+      : undefined
+    if (price === undefined) return undefined
+    const uncachedInput = stats.uncachedInputTokens ?? 0
+    const cacheRead = stats.cacheReadTokens ?? 0
+    const cacheWrite = stats.cacheWriteTokens ?? 0
+    const output = stats.outputTokens ?? 0
+    if (uncachedInput === 0 && cacheRead === 0 && cacheWrite === 0 && output === 0) return undefined
+    return computeCostCny({ uncachedInput, cacheRead, cacheWrite, output }, price)
+  }
+
+  private refreshCost(stats: SessionStatsView): SessionStatsView {
+    const costCny = this.estimateCostCny(stats)
+    return costCny === undefined ? { ...stats, costCny: undefined } : { ...stats, costCny }
   }
 
   private async selectModel(provider: string, model: string): Promise<void> {

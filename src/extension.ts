@@ -80,7 +80,7 @@ class DshExtension {
       this.output,
       vscode.commands.registerCommand('dsh.connect', () => this.connect()),
       vscode.commands.registerCommand('dsh.disconnect', () => this.disconnect()),
-      vscode.commands.registerCommand('dsh.openChat', () => this.openChat()),
+      vscode.commands.registerCommand('dsh.openChat', (sessionId?: SessionId) => this.openChat(sessionId)),
       vscode.commands.registerCommand('dsh.newSession', () => this.newSession()),
       vscode.commands.registerCommand('dsh.refreshSessions', () => this.refreshSessions()),
       vscode.commands.registerCommand('dsh.openInBrowser', () => this.openInBrowser()),
@@ -421,11 +421,11 @@ class DshExtension {
     return this.connection
   }
 
-  private async openChat(): Promise<void> {
+  /** 打开聊天面板。sidebar 会话条目单击时直接传入 sessionId（issue #15）。 */
+  private async openChat(sessionIdArg?: SessionId): Promise<void> {
     try {
       const connection = this.requireConnection()
-      const selection = this.selectedSession()
-      let sessionId = selection
+      let sessionId = sessionIdArg ?? this.selectedSession()
       if (sessionId === undefined) {
         sessionId = await this.pickSession(connection)
       }
@@ -450,6 +450,7 @@ class DshExtension {
       showReasoning: this.config.showReasoning,
       maxToolResultChars: this.config.maxToolResultChars,
       initialStats: initialStatsOf(session),
+      pricing: this.config.pricing,
       onTitleChanged: (title) => {
         const current = this.store?.getSession(sessionId)
         if (current !== undefined) {

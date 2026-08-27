@@ -15,7 +15,7 @@ import type {
   ToolResultEvent,
   UserMessageEvent,
 } from '../client/types.ts'
-import { MAX_TOOL_RESULT_CHARS, type HostToWebviewOp, type RenderMessage, type RenderToolCall } from './types.ts'
+import { MAX_TOOL_RESULT_CHARS, type GoalView, type HostToWebviewOp, type RenderMessage, type RenderToolCall, type TodoEntry } from './types.ts'
 
 export interface ChatModelOptions {
   connection: DshConnection
@@ -45,6 +45,8 @@ export class ChatModel {
   private readonly maxToolResultChars: number
   private readonly messages: RenderMessage[] = []
   private readonly toolCalls = new Map<string, RenderToolCall>()
+  private todos: TodoEntry[] = []
+  private goal: GoalView | null = null
   private maxSeq = 0
   private streaming: StreamingState | undefined
   private loaded = false
@@ -97,6 +99,16 @@ export class ChatModel {
     return this.messages.map((message) => ({ ...message, toolCalls: [...message.toolCalls] }))
   }
 
+  /** Latest todo list snapshot (last todo/write wins). */
+  todosSnapshot(): TodoEntry[] {
+    return this.todos.map((todo) => ({ ...todo }))
+  }
+
+  /** Latest goal snapshot (last goal/change wins), or null when none/cleared. */
+  goalSnapshot(): GoalView | null {
+    return this.goal === null ? null : { ...this.goal, blockedReason: this.goal.blockedReason ? { ...this.goal.blockedReason } : undefined }
+  }
+
   private applyEvent(event: SessionEvent, live: boolean): void {
     if (this.disposed) return
     if (event.seq <= this.maxSeq && this.loaded) return
@@ -116,6 +128,12 @@ export class ChatModel {
         break
       case 'tool/result':
         this.handleToolResult(event as unknown as ToolResultEvent)
+        break
+      case 'todo/write':
+        this.handleTodos(event.data as { todos?: TodoEntry[] })
+        break
+      case 'goal/change':
+        this.handleGoalChange(event.data as Record<string, unknown>)
         break
       case 'turn/end': {
         const data = event.data as { turn: number; reason: { kind: string } }
@@ -265,6 +283,44 @@ export class ChatModel {
       this.streaming = undefined
     }
     this.onOp({ type: 'finalize-message', id, message: render })
+  }
+
+  /** todo/write：整表替换，全量同步到面板。 */
+  private handleTodos(data: { todos?: TodoEntry[] }): void {
+    if (!Array.isArray(data.todos)) return
+    this.todos = data.todos
+      .filter((t) => t !== null && typeof t === 'object' && typeof t.content === 'string' && t.content.trim().length > 0)
+      .map((t) => ({
+        content: t.content.trim(),
+        status: t.status === 'in_progress' || t.status === 'completed' ? t.status : 'pending',
+      }))
+    this.onOp({ type: 'todos', todos: this.todosSnapshot() })
+  }
+
+  /** goal/change：快照/清空，投影最新目标状态。 */
+  private handleGoalChange(data: Record<string, unknown>): void {
+    if (data?.kind !== 'goal/change') return
+    if (data.operation === 'clear') {
+      this.goal = null
+      this.onOp({ type: 'goal', goal: null })
+      return
+    }
+    const goal = data.goal as Record<string, unknown> | undefined
+    if (goal === undefined || typeof goal !== 'object' || typeof goal.id !== 'string' || typeof goal.objective !== 'string') return
+    const phase = goal.phase
+    if (phase !== 'active' && phase !== 'paused' && phase !== 'blocked' && phase !== 'complete') return
+    const blocked = goal.blockedReason as Record<string, unknown> | undefined
+    this.goal = {
+      id: goal.id,
+      objective: goal.objective,
+      phase,
+      maxGoalRounds: typeof goal.maxGoalRounds === 'number' ? goal.maxGoalRounds : 0,
+      roundsStarted: typeof data.roundsStarted === 'number' ? data.roundsStarted : 0,
+      ...(phase === 'blocked' && blocked !== undefined && typeof blocked.message === 'string'
+        ? { blockedReason: { code: typeof blocked.code === 'string' ? blocked.code : '', message: blocked.message } }
+        : {}),
+    }
+    this.onOp({ type: 'goal', goal: this.goalSnapshot() })
   }
 
   private handleToolCall(event: ToolCallEvent): void {

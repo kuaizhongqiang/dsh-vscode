@@ -42,6 +42,24 @@ export interface SessionStatsView {
   pressureTokens?: number
   projectedTokens?: number
   contextWindow?: number
+  /** 按当前会话模型官方价估算的累计费用（¥，来自 tokenUsage 投影）。 */
+  costCny?: number
+}
+
+/** todo/write 事件携带的单个任务。 */
+export interface TodoEntry {
+  content: string
+  status: 'pending' | 'in_progress' | 'completed'
+}
+
+/** goal/change 事件投影后的目标视图。 */
+export interface GoalView {
+  id: string
+  objective: string
+  phase: 'active' | 'paused' | 'blocked' | 'complete'
+  maxGoalRounds: number
+  roundsStarted: number
+  blockedReason?: { code: string; message: string }
 }
 
 /** @ 提及候选：会话 cwd / 当前工作区下的一个文件或文件夹。 */
@@ -63,7 +81,7 @@ export interface PromptImage {
 }
 
 export type HostToWebviewOp =
-  | { type: 'init'; sessionId: string; title?: string; cwd?: string; running: boolean; messages: RenderMessage[]; showReasoning: boolean }
+  | { type: 'init'; sessionId: string; title?: string; cwd?: string; running: boolean; messages: RenderMessage[]; showReasoning: boolean; todos?: TodoEntry[]; goal?: GoalView | null }
   | { type: 'connection'; connected: boolean }
   | { type: 'running'; running: boolean }
   | { type: 'models'; current: { provider: string; model: string; reasoningEffort?: string } | null; routable: boolean; groups: SessionModels['groups']; failures: SessionModels['failures'] }
@@ -74,6 +92,8 @@ export type HostToWebviewOp =
   | { type: 'finalize-message'; id: string; message: RenderMessage }
   | { type: 'tool-call'; messageId?: string; tool: RenderToolCall }
   | { type: 'tool-result'; callId: string; result: string; isError?: boolean }
+  | { type: 'todos'; todos: TodoEntry[] }
+  | { type: 'goal'; goal: GoalView | null }
   | { type: 'approval'; rpcId: string; approvalId: string; toolName: string; reason?: string }
   | { type: 'approval-resolved'; approvalId: string; outcome: string }
   | { type: 'question'; rpcId: string; questions: QuestionItem[] }

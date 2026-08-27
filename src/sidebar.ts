@@ -619,6 +619,8 @@ function sessionTreeItem(session: StoredSession): vscode.TreeItem {
     ].join('\n'),
   )
   item.contextValue = 'dsh-session'
+  // 单击会话条目直接打开聊天面板（issue #15），无需再走一步选择。
+  item.command = { command: 'dsh.openChat', title: '打开会话', arguments: [session.sessionId] }
   return item
 }
 
