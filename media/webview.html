@@ -9,7 +9,8 @@
   :root {
     --bg: var(--vscode-editor-background, #1e1e1e);
     --fg: var(--vscode-editor-foreground, #d4d4d4);
-    --border: var(--vscode-panel-border, rgba(128,128,128,0.35));
+    /* 中性灰描边：不随主题 panel.border 变成绿色（issue #13 用户主题下边框呈亮绿） */
+    --border: rgba(128,128,128,0.35);
     --accent: var(--vscode-textLink-foreground, #4daafc);
     --muted: var(--vscode-descriptionForeground, #9d9d9d);
     --bubble-user: var(--vscode-editorWidget-background, #252526);
@@ -148,13 +149,14 @@
   }
 
   /* ---- tool cards ---- */
+  /* 背景与气泡同色（硬编码，不依赖主题变量），确保卡片主体在任意主题下都可见；
+     done 状态不再用绿色边框（用户主题下半透明绿叠加成暗绿"分隔线"，issue #13/#12）。 */
   .tool-card {
     border: 1px solid var(--border); border-radius: var(--radius);
-    background: var(--tool-bg); margin: 2px 0; overflow: hidden;
+    background: #252526; margin: 2px 0; overflow: hidden;
     font-size: 12px;
   }
   .tool-card.error { border-color: rgba(244,135,113,0.5); }
-  .tool-card.done { border-color: rgba(137,209,125,0.35); }
   .tool-card .tool-head {
     display: flex; align-items: center; gap: 8px; padding: 7px 11px; cursor: pointer;
     user-select: none;
@@ -171,9 +173,8 @@
   .tool-card .tool-head .tool-time { color: var(--muted); font-size: 11px; }
   .tool-card .tool-body {
     padding: 0 11px 10px; display: none;
-    max-height: 0; overflow: hidden; transition: max-height 0.25s ease;
   }
-  .tool-card.open .tool-body { display: block; max-height: 700px; }
+  .tool-card.open .tool-body { display: block; }
   .tool-card pre {
     margin: 4px 0 0; padding: 6px 8px; background: rgba(0,0,0,0.25);
     border-radius: 5px; overflow-x: auto; white-space: pre-wrap; word-break: break-all;
@@ -240,7 +241,8 @@
     padding: 0 14px 2px; max-height: 34vh; overflow-y: auto;
   }
   .ov-panel {
-    border: 1px solid var(--border); border-radius: var(--radius);
+    /* 无描边：面板背景与圆角即可区分，避免主题色边框形成"绿线"（issue #13） */
+    border-radius: var(--radius);
     background: var(--tool-bg); font-size: 12px; overflow: hidden;
   }
   .ov-panel .ov-head {
@@ -546,6 +548,15 @@
       t.card.classList.toggle('error', tool.status === 'error');
       t.card.classList.toggle('done', tool.status === 'done');
       if (tool.result !== undefined) {
+        // 卡片创建时若无 result，resultPre 为 null；此处兜底补建，避免 TypeError
+        // （issue #12：消息重渲染带结果时曾在此抛错，导致卡片更新中断）。
+        if (!t.resultPre) {
+          var resLabel2 = el('div', 'tool-result-label', tool.isError ? '结果（错误）' : '结果');
+          t.resultPre = el('pre');
+          if (tool.isError) t.resultPre.style.color = 'var(--error)';
+          t.card.querySelector('.tool-body').appendChild(resLabel2);
+          t.card.querySelector('.tool-body').appendChild(t.resultPre);
+        }
         t.resultPre.textContent = tool.result;
         if (tool.isError) t.resultPre.style.color = 'var(--error)';
       }
@@ -737,7 +748,12 @@
     messagesEl.appendChild(wrap);
     msgEls[msg.id] = { el: wrap, textEl: textEl, bodyEl: body, reasoningEl: null };
     (msg.toolCalls || []).forEach(function (tool) {
-      renderToolCard(Object.assign({}, tool, { messageId: msg.id }));
+      try {
+        renderToolCard(Object.assign({}, tool, { messageId: msg.id }));
+      } catch (e) {
+        // 单张卡片失败不拖垮其余卡片（issue #12）
+        console.error('[dsh-webview] renderToolCard failed:', e);
+      }
     });
     lastMessageId = msg.id;
     removeEmptyState();
@@ -821,6 +837,11 @@
         sessionRunning = op.running;
         if (op.showReasoning !== undefined) showReasoning = op.showReasoning;
         updateBadge();
+        // 诊断：确认 init 里带了多少工具调用（issue #12 排查用）。
+        var toolCount = (op.messages || []).reduce(function (n, m) {
+          return n + ((m && m.toolCalls) ? m.toolCalls.length : 0);
+        }, 0);
+        console.log('[dsh-webview] init: messages=' + (op.messages || []).length + ' toolCalls=' + toolCount);
         messagesEl.querySelectorAll('.msg, .tool-card, .approval, .question, .turn-badge').forEach(function (e) { e.remove(); });
         lastRole = null;
         (op.messages || []).forEach(renderMessage);
