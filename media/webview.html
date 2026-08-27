@@ -38,7 +38,6 @@
   header {
     display: flex; align-items: center; gap: 8px;
     padding: 6px 10px;
-    border-bottom: 1px solid var(--border);
     flex: 0 0 auto;
     background: var(--vscode-editorWidget-background, #252526);
   }
@@ -135,7 +134,7 @@
   .body table { border-collapse: collapse; margin: 6px 0; }
   .body th, .body td { border: 1px solid var(--border); padding: 3px 8px; font-size: 12px; }
   .body th { background: rgba(128,128,128,0.15); }
-  .body hr { border: none; border-top: 1px solid var(--border); margin: 8px 0; }
+  .body hr { border: none; background: rgba(128,128,128,0.25); height: 1px; margin: 8px 0; }
 
   details.reasoning { margin: 4px 0; }
   details.reasoning summary {
@@ -149,14 +148,12 @@
   }
 
   /* ---- tool cards ---- */
-  /* 背景与气泡同色（硬编码，不依赖主题变量），确保卡片主体在任意主题下都可见；
-     done 状态不再用绿色边框（用户主题下半透明绿叠加成暗绿"分隔线"，issue #13/#12）。 */
+  /* 无边框：卡片用圆角+背景区分（任何主题下都可见，且不会产生横线，issue #13/#12）。 */
   .tool-card {
-    border: 1px solid var(--border); border-radius: var(--radius);
+    border-radius: var(--radius);
     background: #252526; margin: 2px 0; overflow: hidden;
     font-size: 12px;
   }
-  .tool-card.error { border-color: rgba(244,135,113,0.5); }
   .tool-card .tool-head {
     display: flex; align-items: center; gap: 8px; padding: 7px 11px; cursor: pointer;
     user-select: none;
@@ -332,7 +329,6 @@
     flex: 0 0 auto;
     display: flex; flex-wrap: wrap; gap: 4px 14px;
     padding: 4px 12px 6px;
-    border-top: 1px solid var(--border);
     font-size: 11px; color: var(--muted);
     background: var(--vscode-editorWidget-background, #252526);
   }
@@ -777,6 +773,29 @@
     }
   }
 
+  /** 绿线探测器（issue #13）：扫描消息区/概览区里带边框的元素，打印到控制台。 */
+  function scanForLines(tag) {
+    try {
+      var found = [];
+      var boxes = [messagesEl];
+      if (overviewEl) boxes.push(overviewEl);
+      boxes.forEach(function (box) {
+        for (var i = 0; i < box.children.length; i++) {
+          var child = box.children[i];
+          var cs = getComputedStyle(child);
+          ['borderTop', 'borderBottom'].forEach(function (side) {
+            var w = parseFloat(cs[side + 'Width']) || 0;
+            if (w > 0) {
+              found.push(child.tagName + '.' + String(child.className || '').replace(/\s+/g, '.') +
+                ' ' + side + '=' + w + 'px color=' + cs[side + 'Color']);
+            }
+          });
+        }
+      });
+      console.log('[dsh-webview] lines @' + tag + ': ' + (found.length > 0 ? JSON.stringify(found) : 'none'));
+    } catch (e) { /* 诊断失败不影响功能 */ }
+  }
+
   function scrollBottom() {
     if (nearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
   }
@@ -849,6 +868,7 @@
         if (op.todos) renderTodos(op.todos);
         renderGoal(op.goal === undefined ? null : op.goal);
         updateEmptyState();
+        scanForLines('init');
         break;
       }
       case 'models': {
@@ -887,6 +907,7 @@
         break;
       case 'append-message':
         renderMessage(op.message);
+        scanForLines('append');
         break;
       case 'stream-text': {
         msgTexts[op.id] = (msgTexts[op.id] || '') + op.text;
@@ -914,6 +935,7 @@
         msgTexts[op.id] = op.message.text;
         msgReasoning[op.id] = op.message.reasoning || '';
         renderMessage(op.message);
+        scanForLines('finalize');
         break;
       }
       case 'tool-call':
