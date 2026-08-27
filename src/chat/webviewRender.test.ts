@@ -247,4 +247,60 @@ describe('webview tool cards (issue #12)', () => {
     // 消息区所有子项禁收缩。
     expect(styleText).toMatch(/#messages > \* \{ flex-shrink: 0; \}/)
   })
+
+  it('skips the empty bubble for pure-tool turns (text-less assistant message renders cards only)', () => {
+    const h = setup()
+    h.send({ type: 'connection', connected: true })
+    h.send({
+      type: 'init',
+      sessionId: 's1',
+      running: false,
+      showReasoning: true,
+      messages: [
+        // 纯工具回合：无文字、无思考
+        {
+          id: 'a1',
+          role: 'assistant',
+          text: '',
+          toolCalls: [{ callId: 'c9', name: 'pwsh', arguments: '{}', status: 'done', result: 'ok' }],
+          time: 2,
+        },
+      ],
+    })
+    expect(h.count('.tool-card')).toBe(1)
+    // 不应渲染空的 .msg 气泡（没有空气泡/奇怪条）
+    expect(h.count('.msg')).toBe(0)
+    expect(h.window.document.querySelector('.tool-card .tool-name')?.textContent).toBe('pwsh')
+  })
+
+  it('renders tool cards collapsed by default with inline SVG icons (no emoji)', () => {
+    const h = setup()
+    h.send({ type: 'connection', connected: true })
+    h.send({
+      type: 'init',
+      sessionId: 's1',
+      running: false,
+      showReasoning: true,
+      messages: [
+        {
+          id: 'a1',
+          role: 'assistant',
+          text: 'x',
+          toolCalls: [{ callId: 'c1', name: 'read', arguments: '{}', status: 'done', result: 'ok' }],
+          time: 2,
+        },
+      ],
+    })
+    const card = h.window.document.querySelector('.tool-card')
+    expect(card).toBeTruthy()
+    // 默认折叠：不携带 open 类（点击头部展开）。
+    expect(card?.classList.contains('open')).toBe(false)
+    // 图标是内联 SVG，不再是 emoji。
+    expect(card?.querySelector('.tool-icon svg')).toBeTruthy()
+    expect(card?.querySelector('.tool-name-icon svg')).toBeTruthy()
+    expect(card?.textContent).not.toMatch(/[📖✏️🔍💻✅❌⏳🔄]/)
+    // 点击头部后展开。
+    ;(card?.querySelector('.tool-head') as HTMLElement | undefined)?.click()
+    expect(card?.classList.contains('open')).toBe(true)
+  })
 })

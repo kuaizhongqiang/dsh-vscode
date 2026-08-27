@@ -117,7 +117,12 @@ describe('issue #12 e2e: real history → ChatModel → webview', () => {
     for (const op of ops) h.send(op)
 
     expect(h.count('.tool-card')).toBeGreaterThan(0)
-    expect(h.count('.msg')).toBe(messages.length)
+    // 纯工具回合（无文字/思考）不渲染空消息气泡，其余消息都应渲染。
+    const bubbleMsgs = messages.filter((m) =>
+      (m.text !== undefined && m.text.length > 0) ||
+      (m.reasoning !== undefined && m.reasoning.length > 0) ||
+      m.streaming === true)
+    expect(h.count('.msg')).toBe(bubbleMsgs.length)
     // 渲染必须零报错（捕获 console.error / uncaught error）。
     expect(h.errors).toEqual([])
     // Every snapshot message with toolCalls must have its card rendered.
