@@ -22,9 +22,9 @@
   - **插件库**：浏览已安装（`DSH_HOME` 下的 skills / tools / presets）与可用（dsh-plugins 合集仓库）插件，点击打开目录；
   - **模式列表**：浏览 agent preset，单击设为新建会话默认。
 - **聊天面板**（Webview）：
-  - 历史消息加载 + 实时流式输出（文本 / 思考过程分开展示，带打字光标）；用户 / 助手消息左右分栏带头像
+  - 历史消息加载 + 实时流式输出（文本 / 思考过程分开展示，带打字光标）；用户 / 助手消息左右分栏带头像；**消息气泡之间无任何分隔线**（纯背景与间距区分）
   - **模型选择器**：面板头部直接切换会话使用的模型（provider/model）
-  - 工具调用卡片：参数、执行状态（等待 / 执行中 / 完成 / 出错）、耗时、结果分区展示，可折叠
+  - **工具调用卡片**：参数、执行状态（等待 / 执行中 / 完成 / 出错）、耗时、结果分区展示；**默认折叠**，点击头部展开/收起；**工具类型用内联 SVG 矢量图标**（read=文档、edit=铅笔、grep/web_search=放大镜、bash/pwsh=终端、web=地球…），状态用彩色圆点表达（完成绿 / 出错红 / 运行黄）；纯工具回合不渲染空的助手气泡
   - **审批卡片**：工具请求执行时直接在面板「允许一次 / 拒绝」
   - **提问表单**：Agent 提问时以选项 / 多选 / 自由文本作答，提交应答校验服务端回执，失败时明确提示（不再静默卡住）
   - **会话概览**：消息区上方实时展示 📋 任务清单（todo/write）与 🎯 目标面板（goal/change：目标文案 / 阶段 / 轮次进度 / 受阻原因），可折叠
@@ -95,7 +95,7 @@ pnpm build          # 产出 dist/extension.js
 
 ```bash
 pnpm exec vsce package --no-dependencies
-code --install-extension dsh-vscode-0.0.8.vsix
+code --install-extension dsh-vscode-0.1.0.vsix
 ```
 
 ## 配置
@@ -115,6 +115,7 @@ code --install-extension dsh-vscode-0.0.8.vsix
 | `dsh.showReasoning` | `true` | 是否显示模型的思考过程（reasoning）折叠块 |
 | `dsh.maxToolResultChars` | `4000` | 工具调用结果在面板中的最大展示字符数 |
 | `dsh.promptMode` | `steer` | 发送消息模式：`steer` = 插话（立即处理，与 DSH Web 一致），`queue` = 排队（等当前回合结束） |
+| `dsh.pricing` | 内置官方价 | 用量栏费用估算的价格表：按模型 id 的每百万 tokens 单价（¥），默认内置 DeepSeek 官方峰谷价与小米 MiMo 价，官方调价后可覆盖 |
 | `dsh.extraHeaders` | `{}` | 附加到每个 `/api` 请求与事件流 WebSocket 握手头的自定义请求头（见「远程访问」） |
 
 ## 命令
@@ -190,13 +191,14 @@ pnpm test        # vitest 单元测试
 node scripts/check-webview-js.mjs   # webview 内联 JS 语法校验
 ```
 
-## 已知限制（v0.0.8）
+## 已知限制（v0.1.0）
 
 - 历史分页「加载更多」尚未实现（仅加载最近一页；`session.history` 的 `maxMessages` 语义是「最近 N 条消息的全部事件」，事件极密的会话一次可能拉取数万条）。
 - 费用按**当前会话模型**的官方价估算累计值（会话内混用多模型时不能精确分摊到各模型，可在 `dsh.pricing` 覆盖价格）。
 - 图片消息暂不展示字节（文本 / 推理 / 工具已支持；粘贴 / 拖入图片会作为附件以 `image` block 发送给模型，历史回显仅显示 `[图片]` 占位）。
 - 事件流为单向推送；无断点续传，重连后靠 seq 去重收敛。
 - `@` 文件提及扫描的是会话 cwd 的一级目录（不递归）；拖入普通文件以 `@文件名` 文本引用（webview 拿不到完整路径）。
+- 概览区的 `🛠 工具调用:X · 卡片:Y · 渲染错误:Z` 是排查用的诊断条（后续版本可隐藏）。
 
 ## CI 与发布
 
@@ -205,7 +207,7 @@ node scripts/check-webview-js.mjs   # webview 内联 JS 语法校验
   [Open VSX](https://open-vsx.org) 发布：在仓库 Secrets 中配置 `OPEN_VSX_TOKEN` 后自动生效。
 
 ```bash
-git tag v0.0.8 && git push origin v0.0.8   # 触发发布流水线
+git tag v0.1.0 && git push origin v0.1.0   # 触发发布流水线
 ```
 
 ## License

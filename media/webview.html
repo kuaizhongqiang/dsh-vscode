@@ -165,12 +165,6 @@
     user-select: none;
   }
   .tool-card .tool-head:hover { background: rgba(128,128,128,0.08); }
-  .tool-card .tool-head .tool-icon { flex: 0 0 auto; width: 18px; display: flex; align-items: center; justify-content: center; color: var(--muted); }
-  .tool-card .tool-head .tool-icon svg { display: block; }
-  .tool-card.done .tool-head .tool-icon { color: var(--ok); }
-  .tool-card.error .tool-head .tool-icon { color: var(--error); }
-  .tool-card.running .tool-head .tool-icon { color: var(--warn); animation: spin 1.2s linear infinite; }
-  @keyframes spin { to { transform: rotate(360deg); } }
   .tool-card .tool-head .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
   .tool-card .tool-head .dot.running { background: var(--warn); animation: blink 1s infinite; }
   .tool-card .tool-head .dot.done { background: var(--ok); }
@@ -540,13 +534,6 @@
     return svgIcon(ICON_PATHS.file);
   }
 
-  function toolIconFor(status) {
-    if (status === 'done') return svgIcon(ICON_PATHS.check);
-    if (status === 'error') return svgIcon(ICON_PATHS.cross);
-    if (status === 'running') return svgIcon(ICON_PATHS.spinner);
-    return svgIcon(ICON_PATHS.clock);
-  }
-
   /** 参数美化：合法 JSON 缩进展示，流式不完整时原样显示。 */
   function prettyArgs(raw) {
     if (!raw) return '';
@@ -572,7 +559,6 @@
       if (tool.arguments !== undefined) t.argsPre.textContent = prettyArgs(tool.arguments);
       t.dot.className = 'dot ' + tool.status;
       t.statusEl.textContent = statusText(tool.status);
-      t.iconEl.innerHTML = toolIconFor(tool.status);
       t.card.classList.toggle('error', tool.status === 'error');
       t.card.classList.toggle('done', tool.status === 'done');
       t.card.classList.toggle('running', tool.status === 'running');
@@ -593,13 +579,14 @@
     }
     var card = el('div', 'tool-card');
     var head = el('div', 'tool-head');
-    var iconEl = el('span', 'tool-icon', toolIconFor(tool.status));
+    // 左侧状态用圆点表达（dot 颜色区分完成/出错/运行中），不再放大的状态图标/emoji；
+    // 工具类型用内联 SVG 图标。
     var dot = el('span', 'dot ' + tool.status);
     var nameIcon = toolNameIcon(tool.name);
     var nameEl = el('span', 'tool-name', escapeHtml(tool.name));
     var timeEl = el('span', 'tool-time', '');
     var statusEl = el('span', 'tool-status', statusText(tool.status));
-    head.appendChild(iconEl); head.appendChild(dot);
+    head.appendChild(dot);
     head.appendChild(el('span', 'tool-name-icon', nameIcon));
     head.appendChild(nameEl); head.appendChild(timeEl); head.appendChild(statusEl);
     var body = el('div', 'tool-body');
@@ -618,7 +605,7 @@
     card.appendChild(head); card.appendChild(body);
     head.addEventListener('click', function () { card.classList.toggle('open'); });
     // 默认折叠：点击头部展开参数/结果（内容过长时 pre 内部滚动）。
-    toolById[tool.callId] = { card: card, iconEl: iconEl, dot: dot, nameEl: nameEl, statusEl: statusEl, timeEl: timeEl, argsPre: argsPre, resultPre: resultPre, wrapper: null };
+    toolById[tool.callId] = { card: card, dot: dot, nameEl: nameEl, statusEl: statusEl, timeEl: timeEl, argsPre: argsPre, resultPre: resultPre, wrapper: null };
     // place after the owning message, else at the end
     var anchor = tool.messageId ? msgEls[tool.messageId] : null;
     if (anchor && anchor.el && anchor.el.nextSibling) {
@@ -1028,7 +1015,6 @@
         if (t) {
           t.dot.className = 'dot ' + (op.isError ? 'error' : 'done');
           t.statusEl.textContent = op.isError ? '出错' : '完成';
-          t.iconEl.textContent = op.isError ? '❌' : '✅';
           t.card.classList.toggle('error', !!op.isError);
           t.card.classList.toggle('done', !op.isError);
           if (!t.resultPre) {

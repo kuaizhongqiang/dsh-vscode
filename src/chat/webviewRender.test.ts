@@ -273,7 +273,7 @@ describe('webview tool cards (issue #12)', () => {
     expect(h.window.document.querySelector('.tool-card .tool-name')?.textContent).toBe('pwsh')
   })
 
-  it('renders tool cards collapsed by default with inline SVG icons (no emoji)', () => {
+  it('renders tool cards collapsed by default with inline SVG tool icons (no emoji, no left status glyph)', () => {
     const h = setup()
     h.send({ type: 'connection', connected: true })
     h.send({
@@ -295,8 +295,10 @@ describe('webview tool cards (issue #12)', () => {
     expect(card).toBeTruthy()
     // 默认折叠：不携带 open 类（点击头部展开）。
     expect(card?.classList.contains('open')).toBe(false)
-    // 图标是内联 SVG，不再是 emoji。
-    expect(card?.querySelector('.tool-icon svg')).toBeTruthy()
+    // 左侧只有状态圆点，没有大的状态图标/emoji。
+    expect(card?.querySelector('.dot.done')).toBeTruthy()
+    expect(card?.querySelector('.tool-icon')).toBeNull()
+    // 工具类型是内联 SVG，不再是 emoji。
     expect(card?.querySelector('.tool-name-icon svg')).toBeTruthy()
     expect(card?.textContent).not.toMatch(/[📖✏️🔍💻✅❌⏳🔄]/)
     // 点击头部后展开。
