@@ -238,4 +238,13 @@ describe('webview tool cards (issue #12)', () => {
     expect(h.count('.tool-card')).toBe(1)
     expect(h.window.document.querySelector('.tool-card .tool-body')?.textContent).toContain('some result')
   })
+
+  it('forbids flex shrinking of messages-area children (issue #12: cards were squashed to 0 height)', () => {
+    const h = setup()
+    const styleText = h.window.document.querySelector('style')?.textContent ?? ''
+    // 卡片自身禁收缩。
+    expect(styleText).toMatch(/\.tool-card \{[^}]*flex-shrink: 0/s)
+    // 消息区所有子项禁收缩。
+    expect(styleText).toMatch(/#messages > \* \{ flex-shrink: 0; \}/)
+  })
 })

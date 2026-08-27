@@ -70,6 +70,8 @@
     padding: 14px 14px 8px;
     display: flex; flex-direction: column; gap: 6px;
   }
+  /* 消息区所有子项禁止 flex 收缩：内容超高时卡片/消息按内容高度显示，不被压扁（issue #12）。 */
+  #messages > * { flex-shrink: 0; }
   .empty { text-align: center; color: var(--muted); margin-top: 56px; font-size: 12.5px; line-height: 1.9; }
   .empty code { background: rgba(128,128,128,0.18); padding: 0 4px; border-radius: 4px; font-size: 12px; }
 
@@ -153,6 +155,10 @@
     border-radius: var(--radius);
     background: #252526; margin: 2px 0; overflow: hidden;
     font-size: 12px;
+    /* 关键修复（issue #12）：消息区是 flex column，overflow:hidden 会让
+       min-height 退化为 0，默认 flex-shrink 把卡片压缩到 0 高（DOM 在但不可见）；
+       禁止收缩后卡片始终按内容高度显示。 */
+    flex-shrink: 0;
   }
   .tool-card .tool-head {
     display: flex; align-items: center; gap: 8px; padding: 7px 11px; cursor: pointer;
