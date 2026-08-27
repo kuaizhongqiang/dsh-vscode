@@ -53,6 +53,7 @@ function setupWebview(): {
   sent: unknown[]
   send: (op: unknown) => void
   count: (selector: string) => number
+  errors: string[]
 } {
   const html = readFileSync(join(__dirname, '..', '..', 'media', 'webview.html'), 'utf8')
   const sent: unknown[] = []
@@ -65,6 +66,16 @@ function setupWebview(): {
     getState: () => undefined,
     setState: () => undefined,
   })
+  // 捕获 webview 运行时的 console.error 与未捕获异常，用于断言渲染零报错。
+  const errors: string[] = []
+  const origError = window.console.error.bind(window.console)
+  window.console.error = (...args: unknown[]) => {
+    errors.push(args.map(String).join(' '))
+    origError(...args)
+  }
+  window.addEventListener('error', (e: ErrorEvent) => {
+    errors.push(`uncaught: ${e.message} @${e.filename}:${e.lineno}`)
+  })
   const match = html.match(/<script>([\s\S]*?)<\/script>/)
   if (!match) throw new Error('no <script> block')
   window.eval(match[1])
@@ -73,6 +84,7 @@ function setupWebview(): {
     sent,
     send: (op) => window.dispatchEvent(new window.MessageEvent('message', { data: op })),
     count: (selector) => window.document.querySelectorAll(selector).length,
+    errors,
   }
 }
 
@@ -106,6 +118,8 @@ describe('issue #12 e2e: real history → ChatModel → webview', () => {
 
     expect(h.count('.tool-card')).toBeGreaterThan(0)
     expect(h.count('.msg')).toBe(messages.length)
+    // 渲染必须零报错（捕获 console.error / uncaught error）。
+    expect(h.errors).toEqual([])
     // Every snapshot message with toolCalls must have its card rendered.
     for (const m of msgWithTools) {
       const cardCount = Array.from(h.window.document.querySelectorAll('.tool-card')).filter((el) =>

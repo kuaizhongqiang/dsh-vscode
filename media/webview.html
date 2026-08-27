@@ -266,6 +266,7 @@
   .ov-goal-phase.complete { background: rgba(137,209,125,0.16); color: var(--ok); }
   .ov-goal-phase.blocked { background: rgba(244,135,113,0.16); color: var(--error); }
   .ov-goal-reason { margin-top: 4px; color: var(--error); font-size: 11.5px; word-break: break-word; }
+  .ov-diag { font-size: 10.5px; color: var(--muted); padding: 2px 4px; user-select: none; }
 
   /* ---- composer ---- */
   #composer {
@@ -392,6 +393,7 @@
   var msgEls = {};     // message id -> {el, textEl, reasoningEl}
   var msgTexts = {};   // message id -> accumulated text
   var msgReasoning = {};
+  var renderErrorCount = 0;  // 渲染异常计数（issue #12 诊断）
   var connectionOpened = false;  // 与 DSH 的事件流是否连通（决定能否输入）
   var sessionRunning = false;    // 当前会话是否在跑
   var showReasoning = true;      // 是否显示思考过程
@@ -742,12 +744,13 @@
     // 先把消息插入消息区并登记 msgEls，再渲染其工具卡片：
     // 顺序反了会导致卡片 append 到消息之前（错乱、看起来"没显示"）。
     messagesEl.appendChild(wrap);
-    msgEls[msg.id] = { el: wrap, textEl: textEl, bodyEl: body, reasoningEl: null };
+    msgEls[msg.id] = { el: wrap, textEl: textEl, bodyEl: body, reasoningEl: null, toolCount: (msg.toolCalls || []).length };
     (msg.toolCalls || []).forEach(function (tool) {
       try {
         renderToolCard(Object.assign({}, tool, { messageId: msg.id }));
       } catch (e) {
         // 单张卡片失败不拖垮其余卡片（issue #12）
+        renderErrorCount++;
         console.error('[dsh-webview] renderToolCard failed:', e);
       }
     });
@@ -794,6 +797,25 @@
       });
       console.log('[dsh-webview] lines @' + tag + ': ' + (found.length > 0 ? JSON.stringify(found) : 'none'));
     } catch (e) { /* 诊断失败不影响功能 */ }
+  }
+
+  /** 页面内诊断条（issue #12）：概览区显示 工具调用数/卡片数/渲染错误数，截图即可见。 */
+  function renderDiagnostics() {
+    try {
+      var toolCallsInMessages = 0;
+      Object.keys(msgEls).forEach(function (id) {
+        var m = msgEls[id];
+        if (m && m.toolCount !== undefined) toolCallsInMessages += m.toolCount;
+      });
+      var cards = messagesEl.querySelectorAll('.tool-card').length;
+      var diag = document.getElementById('dsh-diag');
+      if (!diag) {
+        diag = el('div', 'ov-diag');
+        diag.id = 'dsh-diag';
+        overviewEl.appendChild(diag);
+      }
+      diag.textContent = '🛠 工具调用:' + toolCallsInMessages + ' · 卡片:' + cards + ' · 渲染错误:' + renderErrorCount;
+    } catch (e) { /* ignore */ }
   }
 
   function scrollBottom() {
@@ -869,6 +891,7 @@
         renderGoal(op.goal === undefined ? null : op.goal);
         updateEmptyState();
         scanForLines('init');
+        renderDiagnostics();
         break;
       }
       case 'models': {
@@ -908,6 +931,7 @@
       case 'append-message':
         renderMessage(op.message);
         scanForLines('append');
+        renderDiagnostics();
         break;
       case 'stream-text': {
         msgTexts[op.id] = (msgTexts[op.id] || '') + op.text;
@@ -936,11 +960,18 @@
         msgReasoning[op.id] = op.message.reasoning || '';
         renderMessage(op.message);
         scanForLines('finalize');
+        renderDiagnostics();
         break;
       }
       case 'tool-call':
         // 把流式期间的 messageId 传给卡片，让它就近挂到所属消息之后（issue #12）。
-        renderToolCard(Object.assign({}, op.tool, op.messageId !== undefined ? { messageId: op.messageId } : {}));
+        try {
+          renderToolCard(Object.assign({}, op.tool, op.messageId !== undefined ? { messageId: op.messageId } : {}));
+        } catch (e) {
+          renderErrorCount++;
+          console.error('[dsh-webview] tool-call render failed:', e);
+        }
+        renderDiagnostics();
         break;
       case 'tool-result': {
         var t = toolById[op.callId];
@@ -1497,7 +1528,9 @@
         handleOp(msg);
       } catch (e) {
         // 单个 op 失败不拖垮整个面板；把错误打到 webview 控制台方便排查（issue #12）。
+        renderErrorCount++;
         console.error('[dsh-webview] handleOp(' + msg.type + ') failed:', e);
+        renderDiagnostics();
       }
     }
   });
