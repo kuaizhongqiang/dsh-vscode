@@ -196,10 +196,12 @@ class DshExtension {
           break
         } catch (error) {
           const message = errorMessage(error)
+          // 本地模式 401：无论 token 来自手动设置还是共享文件，都可能因
+          // launcher 重启 dsh 而失效——重读共享文件（launcher/vscode 写入的
+          // 当前权威值）并重试一次。remote 模式不重试（token 是远程服务器的）。
           const canAutoRetry = attempt < 2
             && message.includes('401')
             && !this.config.remote
-            && this.config.token.trim().length === 0
           if (!canAutoRetry) {
             candidate.dispose()
             throw error
