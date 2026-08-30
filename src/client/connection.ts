@@ -110,8 +110,11 @@ export class DshConnection {
       await this.rpc.call<{ items: SessionSummary[] }>('session/list', { _request: {} })
     } catch (error) {
       if (error instanceof DshTransportError && error.status === 401) {
+        const authHint = this.authError.length > 0
+          ? `（认证交换失败：${this.authError}）`
+          : '（已用 token 换取 cookie，但 /api 仍拒绝——请确认 dsh.serverUrl 与 token 匹配）'
         throw new Error(
-          'DSH 返回 401 未授权：新版 DSH 即使本地也默认开启浏览器会话认证。请在设置里为 dsh.token 填入当前 dsh web 打印的 ?token= 值（服务重启后需更新）。',
+          `DSH 返回 401 未授权：新版 DSH 即使本地也默认开启浏览器会话认证。请在设置里为 dsh.token 填入当前 dsh web 打印的 ?token= 值（服务重启后需更新）。${authHint}`,
         )
       }
       throw error
@@ -166,13 +169,9 @@ export class DshConnection {
       this.authCookie = auth.cookie
       this.rpc.applyAuth(auth)
     } catch (error) {
-      // Non-fatal: the server may not require auth (local). Verify will surface
-      // real connectivity/auth failures.
-      const message = error instanceof Error ? error.message : String(error)
-      if (this.extraHeaders['Cookie'] === undefined && this.authCookie.length === 0) {
-        // keep going; a local server without a token gate answers 200.
-      }
-      void message
+      // 记录失败原因，401 诊断信息会带上；非致命：未开启认证的服务仍可连。
+      this.authError = error instanceof Error ? error.message : String(error)
+      void this.authError
     }
   }
 
