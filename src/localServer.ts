@@ -10,6 +10,7 @@ import { existsSync, statSync } from 'node:fs'
 import { connect as netConnect } from 'node:net'
 import { join } from 'node:path'
 import { DshRpcClient, DshTransportError } from './client/rpc.ts'
+import { clearLaunchToken, launchTokenFilePath, tokenFromUrl, tokenUrlFromLogs, writeLaunchToken } from './launchToken.ts'
 
 export type LocalServiceStatus = 'stopped' | 'starting' | 'running' | 'failed'
 
@@ -164,6 +165,8 @@ export class LocalServerManager {
     child.on('exit', (code, signal) => {
       if (this.child !== child) return // 已被 stop() 替换
       this.child = undefined
+      // dsh 进程已退出：其 launch token 随之失效，清理共享 token 文件（pid 匹配才删）。
+      clearLaunchToken(child.pid)
       if (this.state.status === 'starting') {
         this.appendLog(`进程提前退出：code=${code ?? ''} signal=${signal ?? ''}`)
         this.fail(`本地 dsh web 进程提前退出（exit=${code ?? signal ?? 'unknown'}），请检查日志`)
@@ -254,6 +257,12 @@ export class LocalServerManager {
             reused: false,
           })
           this.appendLog(`本地服务就绪：${url}`)
+          // dsh 打印 token URL 与端口就绪几乎同时；等几秒确保日志里能取到，
+          // 再写入共享 token 文件（供 dsh-launcher 等应用读取，避免手动抄 token）。
+          const tokenUrl = await this.waitForTokenFromLogs(3_000)
+          if (tokenUrl !== undefined) {
+            this.persistLaunchToken(tokenUrl)
+          }
           return { url }
         }
       }
@@ -289,10 +298,37 @@ export class LocalServerManager {
     this.setState({ ...this.state, status: 'failed', error: full })
   }
 
+  /**
+   * 等待子进程日志出现带 token 的 URL（dsh 打印 token 行与端口就绪之间有
+   * 毫秒级间隔，直接读可能拿不到）。
+   */
+  private async waitForTokenFromLogs(timeoutMs: number): Promise<string | undefined> {
+    const deadline = Date.now() + timeoutMs
+    let last: string | undefined
+    while (Date.now() < deadline) {
+      last = tokenUrlFromLogs(this.state.logs.join('\n'))
+      if (last !== undefined) return last
+      await sleep(150)
+    }
+    return last
+  }
+
+  /** 把本次拉起的 dsh 的 launch token 写入共享文件（供 dsh-launcher 等应用读取）。 */
+  private persistLaunchToken(tokenUrl: string): void {
+    const pid = this.child?.pid
+    if (pid === undefined) return
+    const token = tokenFromUrl(tokenUrl)
+    if (token === undefined) return
+    writeLaunchToken({ token, url: tokenUrl, port: this.state.port, pid, source: 'dsh-vscode' })
+    this.appendLog(`已写入共享 token 文件 ${launchTokenFilePath()}（供 dsh-launcher 等应用读取）`)
+  }
+
   private killChild(): void {
     const child = this.child
     this.child = undefined
     if (child === undefined || child.pid === undefined) return
+    // 本进程拉起的 dsh 被停止：其 launch token 随之失效，清理共享文件（pid 匹配才删）。
+    clearLaunchToken(child.pid)
     if (child.exitCode !== null || child.signalCode !== null) return // 已退出
     if (process.platform === 'win32') {
       // Windows 下杀整个进程树，避免残留子进程。

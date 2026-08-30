@@ -12,6 +12,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { dshHome } from './dshHome.ts'
 
 export type PluginKind = 'skill' | 'tool' | 'preset' | 'plugin'
 
@@ -24,9 +25,8 @@ export interface PluginEntry {
   installed: boolean
 }
 
-export function dshHome(): string {
-  return process.env.DSH_HOME ?? join(homedir(), '.dsh')
-}
+/** DSH_HOME 解析统一走 dshHome.ts（与共享 token 文件同一来源）。 */
+export { dshHome } from './dshHome.ts'
 
 /** Scan installed plugins under DSH_HOME (skills / tools / presets). */
 export function scanInstalledPlugins(): PluginEntry[] {

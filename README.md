@@ -42,15 +42,21 @@
 - 一个可访问的 DSH 实例（`dsh web` 已启动）。默认连接 `http://127.0.0.1:3080`。
 - 远程访问时，DSH 需用 `--trusted-host <你的域名>` 启动（`/api` 信任围栏），否则 /api 会返回 403。
 - **新版 DSH 无论本地还是远程都默认开启浏览器会话认证**：`/api` 不带会话 cookie 一律返回 401。
-  扩展（包括本地模式）都需要配置 `dsh.token`（`dsh web` 启动时打印的 `?token=…` 值）来换取会话 cookie（见下文「认证」）。
+  扩展需要 launch token 换取会话 cookie（见下文「认证」）。
 
 ### 认证（DSH token，本地与远程通用）
 
 新版 DSH 每次启动 `dsh web` 都会打印一个进程启动 token（`?token=…`）。浏览器用它换取浏览器的会话 cookie；
 扩展作为机器客户端，用**同一个 token** 换取可复用的会话 cookie，认证所有 `/api` 请求与 `remote.mux` 事件流。
-**本地与远程都需要配置 `dsh.token`**（本地服务未开启认证时可留空，但新版默认开启）。
 
-**配置方式（无需任何 Cloudflare / 反代 cookie）**
+- **本地模式（推荐）：无需手动填 token。** 扩展拉起 `dsh web` 后会自动把 token 写入共享文件
+  `$DSH_HOME/launch-token.json`（默认 `~/.dsh/launch-token.json`）；连接时自动读该文件换取会话 cookie。
+  该文件与 **dsh-launcher** 共用：launcher 拉起 dsh 时也会写入，扩展直接读取；
+  反过来扩展拉起的实例 launcher 也能读到（见 `DSH-LAUNCH-TOKEN-FILE.md` 规范）。服务重启后 token 自动轮换、自动更新，无需人工干预。
+- **远程模式：需手动填 `dsh.token`**（远程服务器的 token 无法自动落到本机共享文件）。
+- 显式配置的 `dsh.token` 优先级高于共享文件（远程 / 手动场景覆盖）。
+
+**手动配置方式（远程，或共享文件不可用时的兜底）**
 1. 启动 DSH，记下打印的 token（形如 `dsh web → http://127.0.0.1:3080/?token=<TOKEN>`）。
 2. 设置页（侧边栏「进入配置」）或设置 JSON：
    - 远程模式：开启 `dsh.remote`、填入 `dsh.serverUrl` 为远程地址；
@@ -58,7 +64,8 @@
    - 两种模式都填入 `dsh.token` 为上面记下的 token。
 3. 扩展连接时自动 `GET {base}/?token=…` 换取 `dsh-auth-*` 会话 cookie，并携带到所有 `/api` 与事件流请求；改配置后自动重连。
 
-> 注意：**DSH 服务重启后会生成新的 token**，旧 token 立即失效（401），需要在设置里更新 `dsh.token`。
+> 注意：**DSH 服务重启后会生成新的 token**，旧 token 立即失效（401）。本地模式由共享
+> token 文件自动处理；手动填写的 `dsh.token` 需要在服务重启后更新。
 
 ### 本地服务路径（dsh.localServerPath）
 
@@ -101,7 +108,7 @@ code --install-extension dsh-vscode-0.2.0.vsix
 |---|---|---|
 | `dsh.serverUrl` | `http://127.0.0.1:3080` | DSH 服务地址（本地模式可留空用默认，远程模式必填远程地址） |
 | `dsh.remote` | `false` | 连接模式开关：`true` = 远程模式（配 token 认证），`false` = 本地模式（可拉起本地 `dsh web`） |
-| `dsh.token` | `""` | DSH 进程启动 token（`dsh web` 打印的 `?token=…` 值）；扩展自动换取会话 cookie 认证 `/api` 与事件流 |
+| `dsh.token` | `""` | DSH 进程启动 token（`dsh web` 打印的 `?token=…` 值）。**本地模式可留空**：扩展自动读共享文件 `$DSH_HOME/launch-token.json`（与 dsh-launcher 共用）；远程模式必填。显式配置优先于共享文件 |
 | `dsh.localServerPath` | `""` | 本地模式下 dsh 安装 / 启动目录（应包含 `dsh.cmd` / `dsh` 启动器）。样例：Windows `D:\dsh`，macOS/Linux `~/dsh` |
 | `dsh.autoConnect` | `true` | 启动后自动连接（本地模式下若已配置 `localServerPath` 会自动拉起服务） |
 | `dsh.autoAttachWorkspace` | `true` | 自动创建 / 关联当前文件夹为 DSH 工作区 |
@@ -148,7 +155,9 @@ src/
 ├── statusBar.ts         状态栏
 ├── sidebar.ts           侧边栏入口式首页 + 会话 / 服务 / 设置 / 插件 / 模式多视图导航
 ├── sessionStore.ts      会话/工作区缓存（session.list + host 帧增量）
-├── localServer.ts       本地 dsh web 服务生命周期（spawn / 就绪轮询 / 终止，路径校验）
+├── localServer.ts       本地 dsh web 服务生命周期（spawn / 就绪轮询 / 终止，路径校验；拉起后写共享 token 文件）
+├── launchToken.ts       `$DSH_HOME/launch-token.json` 共享启动 token 读写（与 dsh-launcher 共用规范）
+├── dshHome.ts           DSH_HOME 解析（插件目录与共享 token 文件的统一来源）
 ├── plugins.ts           插件库数据源（DSH_HOME 已安装 + dsh-plugins 合集仓库可用）
 ├── client/
 │   ├── types.ts         DSH 线上协议类型（对齐 Typert Remote / API Gateway）

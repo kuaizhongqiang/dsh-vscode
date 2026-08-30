@@ -17,6 +17,7 @@ import type { SessionStatsView } from './chat/types.ts'
 import { onConfigChanged, readConfig, sessionWebUrl, type DshConfig } from './config.ts'
 import { LocalServerManager, validateLocalServerPath } from './localServer.ts'
 import { scanInstalledPlugins, scanAvailablePlugins, dshHome } from './plugins.ts'
+import { launchTokenFilePath, readLaunchToken } from './launchToken.ts'
 import type { AgentPresetEntry, SessionId, WorkspaceId } from './client/types.ts'
 
 let extension: DshExtension | undefined
@@ -171,12 +172,17 @@ class DshExtension {
           }
         }
       }
-      // DSH 无论本地还是远程都默认开启浏览器认证：只要配置了 dsh.token 就
-      // 用它换取会话 cookie（token 为空时跳过，兼容未开启认证的本地服务）。
+      // DSH 无论本地还是远程都默认开启浏览器认证：有 token 就用它换取会话
+      // cookie（token 为空时跳过，兼容未开启认证的本地服务）。
+      const token = this.resolveLaunchToken()
+      if (token.length > 0) {
+        const source = this.config.token.trim().length > 0 ? '设置 dsh.token' : `共享文件 ${launchTokenFilePath()}`
+        this.output.appendLine(`[dsh-vscode] 使用启动 token 认证（来源：${source}）`)
+      }
       const connection = new DshConnection(url, {
         reconnectIntervalMs: this.config.reconnectIntervalMs,
         extraHeaders: this.config.extraHeaders,
-        token: this.config.token,
+        token,
       })
       const off = connection.onEvent((event) => this.handleConnectionEvent(event))
       this.disposables.push({ dispose: off })
@@ -215,6 +221,20 @@ class DshExtension {
     // Local 模式 + 配置了本地服务目录 → 连接前先拉起服务。
     if (this.config.remote) return false
     return this.config.localServerPath.trim().length > 0
+  }
+
+  /**
+   * 解析当前可用的 launch token：
+   *  - 显式配置 dsh.token 优先（远程 / 手动场景）；
+   *  - 本地模式且未配置时，读共享 token 文件（dsh-launcher 或本插件拉起 dsh
+   *    都会写入 `$DSH_HOME/launch-token.json`，无需手动抄 token）。
+   * 返回空串表示无 token（跳过认证，兼容未开启认证的服务）。
+   */
+  private resolveLaunchToken(): string {
+    const configured = this.config.token.trim()
+    if (configured.length > 0) return configured
+    if (this.config.remote) return ''
+    return readLaunchToken()?.token ?? ''
   }
 
   private disconnect(): void {
@@ -275,6 +295,7 @@ class DshExtension {
     const next = readConfig()
     const serverChanged = next.serverUrl !== this.config.serverUrl
     const headersChanged = JSON.stringify(next.extraHeaders) !== JSON.stringify(this.config.extraHeaders)
+    const tokenChanged = next.token !== this.config.token
     const localPathChanged = next.localServerPath !== this.config.localServerPath
     this.config = next
     if (localPathChanged) {
@@ -284,7 +305,7 @@ class DshExtension {
         this.output.appendLine('[dsh-vscode] dsh.localServerPath 已变更，停止原本地服务')
       }
     }
-    if (serverChanged || headersChanged) {
+    if (serverChanged || headersChanged || tokenChanged) {
       this.output.appendLine(
         `[dsh-vscode] 连接配置变更${serverChanged ? `（serverUrl → ${next.serverUrl}）` : '（extraHeaders / token）'}，重新连接`,
       )
@@ -579,7 +600,15 @@ class DshExtension {
       return
     }
     if (this.connection === undefined) return
-    void vscode.env.openExternal(vscode.Uri.parse(sessionWebUrl(this.connection.baseUrl, sessionId)))
+    const base = this.connection.baseUrl
+    // 带认证的 DSH：浏览器必须先访问 /?token=... 换取会话 cookie 才能看到页面
+    // （token 只在根路径生效，/session/... 直开会被 401 拦下）。
+    // 有 token 时打开 token 根 URL（自动登录并落到首页），否则保持旧行为直开会话页。
+    const token = this.resolveLaunchToken()
+    const target = token.length > 0
+      ? `${base}/?token=${encodeURIComponent(token)}`
+      : sessionWebUrl(base, sessionId)
+    void vscode.env.openExternal(vscode.Uri.parse(target))
   }
 
   private async cancelSelected(): Promise<void> {
