@@ -200,7 +200,7 @@ pnpm test        # vitest 单元测试
 node scripts/check-webview-js.mjs   # webview 内联 JS 语法校验
 ```
 
-## 已知限制（v0.2.2）
+## 已知限制（v0.2.3）
 
 - 历史分页「加载更多」尚未实现（仅加载最近一页；`session.history` 的 `maxMessages` 语义是「最近 N 条消息的全部事件」，事件极密的会话一次可能拉取数万条）。
 - 费用按**当前会话模型**的官方价估算累计值（会话内混用多模型时不能精确分摊到各模型，可在 `dsh.pricing` 覆盖价格）。

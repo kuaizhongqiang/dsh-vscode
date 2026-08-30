@@ -9,7 +9,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, statSync } from 'node:fs'
 import { connect as netConnect } from 'node:net'
 import { join } from 'node:path'
-import { DshRpcClient } from './client/rpc.ts'
+import { DshRpcClient, DshTransportError } from './client/rpc.ts'
 
 export type LocalServiceStatus = 'stopped' | 'starting' | 'running' | 'failed'
 
@@ -263,15 +263,19 @@ export class LocalServerManager {
     throw new Error(`本地 dsh web 在 ${READY_TIMEOUT_MS / 1000}s 内未就绪。请检查 dsh.localServerPath 是否正确，以及服务日志。`)
   }
 
-  /** Probe the server with a real RPC call; any HTTP answer counts as up. */
+  /** Probe the server with a real RPC call; any DSH /api answer counts as up. */
   private async ping(url: string): Promise<boolean> {
     const rpc = new DshRpcClient(url, this.extraHeaders())
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS)
     try {
-      await rpc.call<unknown>('host.describe', {}, controller.signal)
+      // 新版 DSH 移除了 host.describe，用 session/list 探测。
+      await rpc.call<unknown>('session/list', { _request: {} }, controller.signal)
       return true
-    } catch {
+    } catch (error) {
+      // HTTP 401 = 端口上是 DSH，只是未带会话 cookie（本地也需要 token）。
+      // 这也证明该端口被 DSH 占用 → 应复用，而非报"被其他进程占用"。
+      if (error instanceof DshTransportError && error.status === 401) return true
       return false
     } finally {
       clearTimeout(timer)
