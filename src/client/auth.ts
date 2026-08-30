@@ -13,6 +13,9 @@
  * the exchange.
  */
 
+import { request as httpRequest, type IncomingMessage, type RequestOptions } from 'node:http'
+import { request as httpsRequest } from 'node:https'
+
 export interface AuthExchangeResult {
   /** Raw cookie header value, e.g. `dsh-auth-<hash>=v1...`. Empty when unauthenticated. */
   readonly cookie: string
@@ -32,6 +35,55 @@ function parseSetCookies(value: string | null | undefined): Map<string, string> 
     if (name.length > 0 && !out.has(name)) out.set(name, valuePart)
   }
   return out
+}
+
+/**
+ * 通过 Node `http`/`https` 模块完成 token → cookie 交换。
+ *
+ * 部分宿主环境（Electron/Chromium 网络栈）的全局 `fetch` 对
+ * `redirect: 'manual'` 返回 `opaqueredirect`（status 0），读不到 `set-cookie`，
+ * 无法完成交换。此回退路径绕开 fetch 的重定向语义，行为与 curl/undici 一致。
+ */
+function exchangeViaHttp(
+  baseUrl: string,
+  token: string,
+  extraHeaders: Record<string, string>,
+): Promise<AuthExchangeResult> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(`${baseUrl}/?token=${encodeURIComponent(token)}`)
+    const options: RequestOptions = {
+      hostname: url.hostname,
+      port: url.port,
+      path: `${url.pathname}${url.search}`,
+      method: 'GET',
+      headers: { ...extraHeaders },
+    }
+    const onResponse = (res: IncomingMessage): void => {
+      res.resume() // 释放连接
+      const setCookies = res.headers['set-cookie']
+      const raw = Array.isArray(setCookies) ? setCookies[0] : setCookies
+      if (res.statusCode === 303 || res.statusCode === 302) {
+        if (raw === undefined || !raw.includes('dsh-auth-')) {
+          reject(new Error(`DSH 认证成功但未返回会话 cookie（HTTP ${res.statusCode}）`))
+          return
+        }
+        resolve({ cookie: raw.split(';')[0]!.trim(), baseUrl })
+        return
+      }
+      if (res.statusCode === 200) {
+        resolve({ cookie: '', baseUrl })
+        return
+      }
+      reject(new Error(`DSH 认证 cookie 换取失败：HTTP ${res.statusCode}`))
+    }
+    const req = url.protocol === 'https:'
+      ? httpsRequest(options, onResponse)
+      : httpRequest(options, onResponse)
+    req.on('error', (error: Error) => {
+      reject(new Error(`无法连接 DSH 服务 ${baseUrl} 以换取认证 cookie：${error.message}`))
+    })
+    req.end()
+  })
 }
 
 /**
@@ -60,8 +112,13 @@ export async function authenticateWithToken(
       redirect: 'manual',
     })
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error)
-    throw new Error(`无法连接 DSH 服务 ${baseUrl} 以换取认证 cookie：${reason}`)
+    // fetch 不可用：回退 Node http(s) 模块。
+    return exchangeViaHttp(baseUrl, trimmed, extraHeaders)
+  }
+  // Electron/Chromium net fetch 的 manual 重定向返回 opaqueredirect（status 0），
+  // 读不到 set-cookie：回退 Node http(s) 模块重做交换。
+  if (response.status === 0) {
+    return exchangeViaHttp(baseUrl, trimmed, extraHeaders)
   }
   if (response.status !== 303 && response.status !== 302) {
     // A direct 200 means the route didn't require auth (no token gate active).
