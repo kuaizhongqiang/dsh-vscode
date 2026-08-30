@@ -85,8 +85,13 @@ export class DshRpcClient {
   /** Headers shared by every /api request and WebSocket handshake. */
   requestHeaders(extra: Record<string, string> = {}): Record<string, string> {
     const headers: Record<string, string> = { ...this.extraHeaders, ...extra }
-    if (this.authCookie.length > 0 && !Object.hasOwn(headers, 'Cookie')) {
-      headers['Cookie'] = this.authCookie
+    // dsh-auth cookie 必须总是带上：与手动配置的 Cookie（如残留的 Cloudflare
+    // CF_Authorization）**合并**而非跳过——否则认证 cookie 被挤掉导致 401。
+    if (this.authCookie.length > 0) {
+      const existing = headers['Cookie']
+      headers['Cookie'] = existing === undefined || existing.trim().length === 0
+        ? this.authCookie
+        : `${existing}; ${this.authCookie}`
     }
     return headers
   }
