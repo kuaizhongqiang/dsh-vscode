@@ -14,7 +14,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { DshRpcClient } from './rpc.ts'
+import { DshRpcClient, DshTransportError } from './rpc.ts'
 import { authenticateWithToken } from './auth.ts'
 import { RemoteMuxClient } from './mux.ts'
 import type {
@@ -106,7 +106,16 @@ export class DshConnection {
     if (this.mux !== undefined && this.mux.connected) return
     await this.ensureAuth()
     // Verification call — throws on network failure or bad URL.
-    await this.rpc.call<{ items: SessionSummary[] }>('session/list', { _request: {} })
+    try {
+      await this.rpc.call<{ items: SessionSummary[] }>('session/list', { _request: {} })
+    } catch (error) {
+      if (error instanceof DshTransportError && error.status === 401) {
+        throw new Error(
+          'DSH 返回 401 未授权：新版 DSH 即使本地也默认开启浏览器会话认证。请在设置里为 dsh.token 填入当前 dsh web 打印的 ?token= 值（服务重启后需更新）。',
+        )
+      }
+      throw error
+    }
     if (this.mux === undefined) {
       this.mux = new RemoteMuxClient(
         {

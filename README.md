@@ -41,22 +41,24 @@
 - VSCode ≥ 1.90（Node ≥ 20）
 - 一个可访问的 DSH 实例（`dsh web` 已启动）。默认连接 `http://127.0.0.1:3080`。
 - 远程访问时，DSH 需用 `--trusted-host <你的域名>` 启动（`/api` 信任围栏），否则 /api 会返回 403。
-- DSH 对 `/api` 与事件流做了浏览器会话认证：非浏览器客户端需用**进程启动 token** 换取会话 cookie（见下文「远程访问」）。
+- **新版 DSH 无论本地还是远程都默认开启浏览器会话认证**：`/api` 不带会话 cookie 一律返回 401。
+  扩展（包括本地模式）都需要配置 `dsh.token`（`dsh web` 启动时打印的 `?token=…` 值）来换取会话 cookie（见下文「认证」）。
 
-### 远程访问（DSH token 认证）
+### 认证（DSH token，本地与远程通用）
 
-DSH 每次启动 `dsh web` 都会打印一个进程启动 token（`?token=…`）。浏览器用它换取浏览器的会话 cookie；
+新版 DSH 每次启动 `dsh web` 都会打印一个进程启动 token（`?token=…`）。浏览器用它换取浏览器的会话 cookie；
 扩展作为机器客户端，用**同一个 token** 换取可复用的会话 cookie，认证所有 `/api` 请求与 `remote.mux` 事件流。
+**本地与远程都需要配置 `dsh.token`**（本地服务未开启认证时可留空，但新版默认开启）。
 
 **配置方式（无需任何 Cloudflare / 反代 cookie）**
-1. 在服务器上启动 DSH，记下打印的 token（形如 `dsh web → http://127.0.0.1:3080/?token=<TOKEN>`）。
+1. 启动 DSH，记下打印的 token（形如 `dsh web → http://127.0.0.1:3080/?token=<TOKEN>`）。
 2. 设置页（侧边栏「进入配置」）或设置 JSON：
-   - 开启 `dsh.remote`（远程模式）；
-   - 填入 `dsh.serverUrl` 为远程地址（如 `https://dsh.your-domain`）；
-   - 填入 `dsh.token` 为上面记下的 token。
+   - 远程模式：开启 `dsh.remote`、填入 `dsh.serverUrl` 为远程地址；
+   - 本地模式：`dsh.serverUrl` 保持 `http://127.0.0.1:3080`（或由 `dsh.localServerPath` 自动拉起）；
+   - 两种模式都填入 `dsh.token` 为上面记下的 token。
 3. 扩展连接时自动 `GET {base}/?token=…` 换取 `dsh-auth-*` 会话 cookie，并携带到所有 `/api` 与事件流请求；改配置后自动重连。
 
-本地未开启 token 的 DSH 无需配置 `dsh.token`（留空即可）。
+> 注意：**DSH 服务重启后会生成新的 token**，旧 token 立即失效（401），需要在设置里更新 `dsh.token`。
 
 ### 本地服务路径（dsh.localServerPath）
 
@@ -198,7 +200,7 @@ pnpm test        # vitest 单元测试
 node scripts/check-webview-js.mjs   # webview 内联 JS 语法校验
 ```
 
-## 已知限制（v0.2.1）
+## 已知限制（v0.2.2）
 
 - 历史分页「加载更多」尚未实现（仅加载最近一页；`session.history` 的 `maxMessages` 语义是「最近 N 条消息的全部事件」，事件极密的会话一次可能拉取数万条）。
 - 费用按**当前会话模型**的官方价估算累计值（会话内混用多模型时不能精确分摊到各模型，可在 `dsh.pricing` 覆盖价格）。

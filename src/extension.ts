@@ -171,10 +171,12 @@ class DshExtension {
           }
         }
       }
+      // DSH 无论本地还是远程都默认开启浏览器认证：只要配置了 dsh.token 就
+      // 用它换取会话 cookie（token 为空时跳过，兼容未开启认证的本地服务）。
       const connection = new DshConnection(url, {
         reconnectIntervalMs: this.config.reconnectIntervalMs,
         extraHeaders: this.config.extraHeaders,
-        token: this.config.remote ? this.config.token : '',
+        token: this.config.token,
       })
       const off = connection.onEvent((event) => this.handleConnectionEvent(event))
       this.disposables.push({ dispose: off })
