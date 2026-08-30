@@ -189,13 +189,16 @@ node --experimental-strip-types scripts/smoke.mts http://127.0.0.1:3080 [token]
 # 端到端（会新建会话并发一条极小 prompt，验证 创建→prompt→follow 流→history）
 node --experimental-strip-types scripts/e2e.mts http://127.0.0.1:3080 [token]
 
+# 综合联调（token 认证 + workspace + createSession + prompt + follow + 审批探测）
+node --experimental-strip-types scripts/verify-live.mts http://127.0.0.1:3080 [token]
+
 pnpm typecheck   # tsc --noEmit
 pnpm build       # esbuild
 pnpm test        # vitest 单元测试
 node scripts/check-webview-js.mjs   # webview 内联 JS 语法校验
 ```
 
-## 已知限制（v0.2.0）
+## 已知限制（v0.2.1）
 
 - 历史分页「加载更多」尚未实现（仅加载最近一页；`session.history` 的 `maxMessages` 语义是「最近 N 条消息的全部事件」，事件极密的会话一次可能拉取数万条）。
 - 费用按**当前会话模型**的官方价估算累计值（会话内混用多模型时不能精确分摊到各模型，可在 `dsh.pricing` 覆盖价格）。
@@ -211,7 +214,7 @@ node scripts/check-webview-js.mjs   # webview 内联 JS 语法校验
   [Open VSX](https://open-vsx.org) 发布：在仓库 Secrets 中配置 `OPEN_VSX_TOKEN` 后自动生效。
 
 ```bash
-git tag v0.2.0 && git push origin v0.2.0   # 触发发布流水线
+git tag v0.2.1 && git push origin v0.2.1   # 触发发布流水线
 ```
 
 ## License

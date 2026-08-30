@@ -75,6 +75,8 @@ export class DshConnection {
   // Live workspace cache kept fresh by the workspace/follow stream.
   private workspaces: WorkspaceView[] = []
   private readonly followStreams = new Map<SessionId, { close: () => void }>()
+  /** Latest durable sequence per Session, learned from follow snapshot frames. */
+  private readonly sessionCursors = new Map<SessionId, number>()
   private currentClientId: string | undefined
 
   constructor(baseUrl: string, options: DshConnectionOptions = {}) {
@@ -98,12 +100,13 @@ export class DshConnection {
   }
 
   /** Establish the connection: authenticate, verify the server answers, then
-   * open the mux stream (which reconnects itself afterwards). Idempotent. */
+   * open the mux stream (which reconnects itself afterwards). Idempotent.
+   * Resolves once the mux WebSocket is actually open. */
   async connect(): Promise<void> {
     if (this.mux !== undefined && this.mux.connected) return
     await this.ensureAuth()
     // Verification call — throws on network failure or bad URL.
-    await this.rpc.call<{ items: SessionSummary[] }>('session/list', {})
+    await this.rpc.call<{ items: SessionSummary[] }>('session/list', { _request: {} })
     if (this.mux === undefined) {
       this.mux = new RemoteMuxClient(
         {
@@ -123,6 +126,12 @@ export class DshConnection {
       this.mux.connect()
     } else {
       this.mux.connect()
+    }
+    // Wait until the mux WebSocket is open (bounded) so `connected` reflects
+    // reality for the caller and auto-attach runs against a live stream.
+    const deadline = Date.now() + 5000
+    while (!this.connected && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
     }
   }
 
@@ -161,7 +170,7 @@ export class DshConnection {
   // ---- sessions ----
 
   async listSessions(): Promise<SessionListEntry[]> {
-    const result = await this.rpc.call<{ items: SessionSummary[] }>('session/list', {})
+    const result = await this.rpc.call<{ items: SessionSummary[] }>('session/list', { _request: {} })
     return result.items.map((item) => ({
       sessionId: item.sessionId,
       updatedAt: item.updatedAt,
@@ -179,16 +188,16 @@ export class DshConnection {
     sessionId?: string
     agentPreset?: string
   } = {}): Promise<{ sessionId: SessionId; agentPreset?: string }> {
-    return this.rpc.call<{ sessionId: SessionId; agentPreset?: string }>('session/create', options)
+    return this.rpc.call<{ sessionId: SessionId; agentPreset?: string }>('session/create', { request: options })
   }
 
   async history(sessionId: SessionId, maxMessages = 40): Promise<SessionPage> {
     return this.page(sessionId, maxMessages)
   }
 
-  /** Read one message-aligned page. `throughSeq` optional: when absent, the
-   * caller should have followed the session; we read from the live end by
-   * asking for a generous window. */
+  /** Read one message-aligned page. `throughSeq` is required by the DSH wire
+   * contract; when absent, it is resolved from the followed cursor, or probed
+   * via a short-lived follow opening snapshot. */
   async page(
     sessionId: SessionId,
     maxMessages = 40,
@@ -196,10 +205,35 @@ export class DshConnection {
     beforeSeq?: number,
   ): Promise<SessionPage> {
     const address: SessionAddress = { kind: 'session', sessionId }
-    const args: Record<string, unknown> = { address, maxMessages }
-    if (throughSeq !== undefined) args['throughSeq'] = throughSeq
-    if (beforeSeq !== undefined) args['beforeSeq'] = beforeSeq
-    return this.rpc.call<SessionPage>('session/page', args)
+    const resolvedThrough = throughSeq ?? await this.resolveThroughSeq(sessionId)
+    const request: Record<string, unknown> = { address, maxMessages, throughSeq: resolvedThrough }
+    if (beforeSeq !== undefined) request['beforeSeq'] = beforeSeq
+    return this.rpc.call<SessionPage>('session/page', { request })
+  }
+
+  /** Latest durable sequence for a Session, from the followed cursor or a
+   * short-lived follow probe. */
+  private async resolveThroughSeq(sessionId: SessionId): Promise<number> {
+    const cached = this.sessionCursors.get(sessionId)
+    if (cached !== undefined) return cached
+    const address: SessionAddress = { kind: 'session', sessionId }
+    const found = await new Promise<number | undefined>((resolve) => {
+      const handle = this.mux?.openStream(
+        'session/follow',
+        { args: { request: { address } } },
+        {
+          onItem: (value) => {
+            const frame = value as SessionFollowFrame
+            if (frame.type === 'snapshot') {
+              resolve(frame.cursor)
+              handle?.close()
+            }
+          },
+          onEnd: () => resolve(undefined),
+        },
+      )
+    })
+    return found ?? -1
   }
 
   async prompt(
@@ -214,25 +248,27 @@ export class DshConnection {
       content.push({ type: 'image', mediaType: image.mediaType, data: image.data, name: image.name })
     }
     await this.rpc.call('session/prompt', {
-      requestId,
-      sessionId,
-      mode,
-      content,
-      clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      request: {
+        requestId,
+        sessionId,
+        mode,
+        content,
+        clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      },
     })
   }
 
   async cancel(sessionId: SessionId): Promise<void> {
-    await this.rpc.call('session/cancel', { sessionId })
+    await this.rpc.call('session/cancel', { request: { sessionId } })
   }
 
   async rename(sessionId: SessionId, title: string): Promise<string> {
-    const result = await this.rpc.call<{ title: string }>('session/rename', { sessionId, title })
+    const result = await this.rpc.call<{ title: string }>('session/rename', { request: { sessionId, title } })
     return result.title
   }
 
   async fork(sessionId: SessionId): Promise<SessionId> {
-    const result = await this.rpc.call<{ sessionId: SessionId }>('session/fork', { sessionId })
+    const result = await this.rpc.call<{ sessionId: SessionId }>('session/fork', { request: { sessionId } })
     return result.sessionId
   }
 
@@ -246,7 +282,7 @@ export class DshConnection {
   }
 
   async createWorkspace(path: string): Promise<{ workspace: WorkspaceView; created: boolean }> {
-    return this.rpc.call<{ workspace: WorkspaceView; created: boolean }>('workspace/create', { path })
+    return this.rpc.call<{ workspace: WorkspaceView; created: boolean }>('workspace/create', { request: { path } })
   }
 
   // ---- models ----
@@ -267,7 +303,7 @@ export class DshConnection {
   }
 
   async selectModel(sessionId: SessionId, provider: string, model: string): Promise<void> {
-    await this.rpc.call('session/selectModel', { sessionId, provider, model })
+    await this.rpc.call('session/selectModel', { request: { sessionId, provider, model } })
   }
 
   // ---- agent presets ----
@@ -340,21 +376,19 @@ export class DshConnection {
     if (existing !== undefined) return existing
     const handle: { close: () => void } = this.mux?.openStream(
       'session/follow',
-      { args: { address: { kind: 'session', sessionId } } },
+      { args: { request: { address: { kind: 'session', sessionId } } } },
       {
         onItem: (value) => {
           const frame = value as SessionFollowFrame
-          if (frame.type === 'event') {
-            const entry = frame as unknown as SessionHistoryRecord
-            if (entry.type === 'event') onEvent(entry.event as SessionEvent)
-            return
-          }
-          // snapshot: re-emit its events too (seq-deduped downstream).
           if (frame.type === 'snapshot') {
+            this.sessionCursors.set(sessionId, frame.cursor)
             for (const record of frame.records) {
               if (record.type === 'event') onEvent(record.event as SessionEvent)
             }
+            return
           }
+          // a raw event frame
+          if (frame.type === 'event') onEvent(frame.event as SessionEvent)
         },
         onEnd: () => this.followStreams.delete(sessionId),
       },
