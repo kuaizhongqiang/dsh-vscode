@@ -180,6 +180,15 @@ export class SessionStore {
             }
             break
           }
+          case 'host/session-activity': {
+            const f = frame as unknown as { sessionId: SessionId; time: number }
+            const session = this.sessions.get(f.sessionId)
+            if (session !== undefined && f.time > session.updatedAt) {
+              session.updatedAt = f.time
+              changed = true
+            }
+            break
+          }
           case 'host/workspace-changed': {
             const f = frame as unknown as { workspace: WorkspaceView }
             const index = this.workspaces.findIndex((w) => w.workspaceId === f.workspace.workspaceId)

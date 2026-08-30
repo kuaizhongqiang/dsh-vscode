@@ -174,6 +174,7 @@ class DshExtension {
       const connection = new DshConnection(url, {
         reconnectIntervalMs: this.config.reconnectIntervalMs,
         extraHeaders: this.config.extraHeaders,
+        token: this.config.remote ? this.config.token : '',
       })
       const off = connection.onEvent((event) => this.handleConnectionEvent(event))
       this.disposables.push({ dispose: off })
@@ -283,7 +284,7 @@ class DshExtension {
     }
     if (serverChanged || headersChanged) {
       this.output.appendLine(
-        `[dsh-vscode] 连接配置变更${serverChanged ? `（serverUrl → ${next.serverUrl}）` : '（extraHeaders / Cloudflare cookie）'}，重新连接`,
+        `[dsh-vscode] 连接配置变更${serverChanged ? `（serverUrl → ${next.serverUrl}）` : '（extraHeaders / token）'}，重新连接`,
       )
       this.disconnect()
       void this.connect()
@@ -656,8 +657,8 @@ class DshExtension {
         const value = await vscode.window.showInputBox({
           prompt: settingPrompt(key),
           value: current,
-          password: key === 'cloudflareCookie',
-          placeHolder: key === 'cloudflareCookie' ? '粘贴 CF_Authorization 的值' : undefined,
+          password: key === 'token',
+          placeHolder: key === 'token' ? '粘贴 dsh web 打印的 ?token= 值' : undefined,
         })
         if (value !== undefined) {
           await config.update(key, value.trim(), vscode.ConfigurationTarget.Global)
@@ -753,7 +754,7 @@ function readConfigValue(key: string): string | undefined {
 function settingPrompt(key: string): string {
   const prompts: Record<string, string> = {
     serverUrl: 'DSH 服务地址（如 http://127.0.0.1:3080 或 https://dsh.example.com）',
-    cloudflareCookie: 'Cloudflare Access 的 CF_Authorization cookie 值',
+    token: 'DSH 进程启动 token（dsh web 打印的 ?token= 值）',
     defaultAgentPreset: '新建会话的默认 agent preset',
     historyPageSize: '历史消息一次拉取条数（5–200）',
     reconnectIntervalMs: '事件流断开后的重连间隔（毫秒，≥1000）',

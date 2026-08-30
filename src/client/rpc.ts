@@ -1,19 +1,24 @@
 /**
- * Unary RPC client for the DSH /api channel.
+ * Unary RPC client for the current DSH /api channel (Typert Remote protocol).
  *
- * Wire protocol (mirrors @deepseek-ai/dsh-client-connection):
- *   POST {base}/api/{method}
- *   body: { "type": "client-request", "rpcId": "<uuid>", "method": "<method>", "payload": {...} }
- *   response JSON: { "type": "server-response", "rpcId": "<same>", "result": { ok:true, value } | { ok:false, error } }
+ * Wire protocol (mirrors @deepseek-ai/dsh-client-connection + api gateway):
+ *   POST {base}/api/{namespace}/{method}
+ *   body: { "type": "client-request", "rpcId": "<uuid>", "method": "<namespace>/<method>",
+ *           "payload": { "args": { ... } } }
+ *   response JSON: { "type": "server-response", "rpcId": "<same>",
+ *                    "result": { ok:true, value } | { ok:false, error } }
  *
- * Answers to server-requests (approvals / questions) go to POST /api/respond as
- * a client-response echoing the frame's rpcId.
+ * Every Remote payload is wrapped in a single `args` object (including the
+ * `$events/result` endpoint). Authentication rides on the `Cookie` header that
+ * the auth layer attaches to every request and WebSocket handshake.
  */
 
 import { randomUUID } from 'node:crypto'
+import type { AuthExchangeResult } from './auth.ts'
 import type {
   ClientRequest,
   ClientResponse,
+  RemoteEventResultPayload,
   RpcResult,
   ServerResponse,
 } from './types.ts'
@@ -21,7 +26,9 @@ import type {
 export interface RpcTarget {
   /** Base URL of the DSH web server, e.g. http://127.0.0.1:3080 (no trailing slash). */
   baseUrl: string
-  /** Extra headers on every /api request (e.g. Cloudflare Access service token or a session cookie). */
+  /** Auth cookie value to attach as `Cookie:` on every request. Empty = none. */
+  authCookie?: string
+  /** Extra headers on every /api request. */
   extraHeaders?: Record<string, string>
 }
 
@@ -53,33 +60,56 @@ export function normalizeBaseUrl(raw: string): string {
 export class DshRpcClient {
   private readonly baseUrl: string
   private readonly extraHeaders: Record<string, string>
+  /** Latest auth cookie; updated by the auth exchange before first use. */
+  private authCookie: string
 
-  constructor(baseUrl: string, extraHeaders: Record<string, string> = {}) {
+  constructor(baseUrl: string, options: { authCookie?: string; extraHeaders?: Record<string, string> } = {}) {
     this.baseUrl = normalizeBaseUrl(baseUrl)
-    this.extraHeaders = extraHeaders
+    this.authCookie = options.authCookie ?? ''
+    this.extraHeaders = { ...(options.extraHeaders ?? {}) }
   }
 
   get url(): string {
     return this.baseUrl
   }
 
+  /** Merge the authentication result (cookie) into this client. */
+  applyAuth(auth: AuthExchangeResult): void {
+    if (auth.cookie.length > 0) this.authCookie = auth.cookie
+  }
+
+  get cookie(): string {
+    return this.authCookie
+  }
+
+  /** Headers shared by every /api request and WebSocket handshake. */
+  requestHeaders(extra: Record<string, string> = {}): Record<string, string> {
+    const headers: Record<string, string> = { ...this.extraHeaders, ...extra }
+    if (this.authCookie.length > 0 && !Object.hasOwn(headers, 'Cookie')) {
+      headers['Cookie'] = this.authCookie
+    }
+    return headers
+  }
+
   /**
-   * Call one unary RPC method. Throws DshTransportError on HTTP/network
-   * failure, or RpcErrorResult when the server answered with ok:false.
+   * Call one unary RPC method. `method` is `<namespace>/<method>` (e.g.
+   * `session/list`). The named `args` are wrapped in `{ args }` for transport.
+   * Throws DshTransportError on HTTP/network failure, or RpcErrorResult when
+   * the server answered with ok:false.
    */
-  async call<T>(method: string, payload: unknown, signal?: AbortSignal): Promise<T> {
+  async call<T>(method: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
     const rpcId = randomUUID()
     const message: ClientRequest = {
       type: 'client-request',
       rpcId,
       method,
-      payload,
+      payload: { args },
     }
     let response: Response
     try {
       response = await fetch(`${this.baseUrl}/api/${method}`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', ...this.extraHeaders },
+        headers: { 'content-type': 'application/json', ...this.requestHeaders() },
         body: JSON.stringify(message),
         signal,
       })
@@ -99,7 +129,7 @@ export class DshRpcClient {
     } catch {
       const contentType = response.headers.get('content-type') ?? ''
       const hint = contentType.includes('html')
-        ? '返回了 HTML（很可能被反向代理 / Cloudflare Access 等访问控制拦截，未放行 /api）'
+        ? '返回了 HTML（很可能被反向代理 / 访问控制拦截，未放行 /api）'
         : '响应不是合法 JSON'
       throw new DshTransportError(`DSH RPC ${method} ${hint}`)
     }
@@ -110,50 +140,24 @@ export class DshRpcClient {
   }
 
   /**
-   * Answer a server-request (approval / question). `rpcId` must echo the
-   * frame's rpcId; `value` is the domain response payload.
-   *
-   * The server answers with a receipt `{ accepted: true } | { accepted: false,
-   * reason: 'not-pending' | 'bad-response' }`. A rejected receipt (e.g. the
-   * request already timed out or was answered by another client) is surfaced as
-   * an error — silently swallowing it leaves the agent waiting forever with no
-   * feedback (issue #16).
+   * Answer one forwarded Remote event (approval / question waterfall) via the
+   * `$events/result` unary endpoint. `value` is the domain response payload.
    */
-  async respond(rpcId: string, value: unknown): Promise<void> {
-    const message: ClientResponse = {
-      type: 'client-response',
-      rpcId,
-      result: { ok: true, value },
-    }
-    let response: Response
-    try {
-      response = await fetch(`${this.baseUrl}/api/respond`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', ...this.extraHeaders },
-        body: JSON.stringify(message),
-      })
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error)
-      throw new DshTransportError(`无法送达应答到 DSH 服务：${reason}`)
-    }
-    if (!response.ok) {
-      throw new DshTransportError(`应答送达失败：HTTP ${response.status}`)
-    }
-    try {
-      const receipt = (await response.json()) as { accepted?: boolean; reason?: string }
-      if (receipt?.accepted === false) {
-        const reason = receipt.reason ?? 'unknown'
-        const hint = reason === 'not-pending'
-          ? '请求已不存在（可能已超时、已被取消，或已被其他端处理）'
-          : reason === 'bad-response'
-            ? '应答内容未被接受'
-            : '未知原因'
-        throw new RpcErrorResult('RESPONSE_REJECTED', `DSH 拒绝该应答：${hint}（${reason}）`, { reason })
-      }
-    } catch (error) {
-      if (error instanceof RpcErrorResult) throw error
-      // 回执缺失或非 JSON：保持兼容（老版本服务端），不阻断应答送达。
-    }
+  async respondEvent(result: RemoteEventResultPayload): Promise<void> {
+    await this.call<unknown>(`$events/result`, result as unknown as Record<string, unknown>)
+  }
+
+  /**
+   * Legacy alias kept for compatibility with the old approval/question flow.
+   * The current DSH answers forwarded events through `respondEvent`; this
+   * throws a clear error if still reached.
+   */
+  async respond(rpcId: string, _value: unknown): Promise<void> {
+    throw new RpcErrorResult(
+      'RESPONSE_REJECTED',
+      `旧版应答通道已废弃（rpcId=${rpcId}）。请通过 $events/result 应答审批/提问。`,
+      { rpcId },
+    )
   }
 }
 
@@ -161,3 +165,5 @@ export function unwrapResult<T>(method: string, result: RpcResult<unknown>): T {
   if (result.ok) return result.value as T
   throw new RpcErrorResult(result.error.code, result.error.message, result.error.details)
 }
+
+export type { ClientResponse }

@@ -179,24 +179,24 @@ export class ChatPanel {
       case 'approval-requested':
         this.postOp({
           type: 'approval',
-          rpcId: event.rpcId,
-          approvalId: event.frame.approvalId,
-          toolName: event.frame.toolName,
-          reason: event.frame.reason,
+          rpcId: event.eventId,
+          approvalId: typeof event.frame.approvalId === 'string' ? event.frame.approvalId : event.eventId,
+          toolName: typeof event.frame.toolName === 'string' ? event.frame.toolName : '未知工具',
+          reason: typeof event.frame.reason === 'string' ? event.frame.reason : undefined,
         })
         break
       case 'approval-resolved':
         this.postOp({
           type: 'approval-resolved',
-          approvalId: event.frame.approvalId,
-          outcome: event.frame.outcome,
+          approvalId: event.approvalId,
+          outcome: event.outcome,
         })
         break
       case 'question-requested':
-        this.postOp({ type: 'question', rpcId: event.rpcId, questions: event.frame.questions })
+        this.postOp({ type: 'question', rpcId: event.eventId, questions: event.questions })
         break
       case 'question-resolved':
-        this.postOp({ type: 'question-resolved', questionRpcId: event.frame.questionRpcId, outcome: event.frame.outcome })
+        this.postOp({ type: 'question-resolved', questionRpcId: '', outcome: event.outcome })
         break
       default:
         break
@@ -384,9 +384,10 @@ export class ChatPanel {
     try {
       const models = await this.context.connection.models(this.sessionId)
       this.currentModel = models.current ?? undefined
+      const current = models.current ?? null
       this.postOp({
         type: 'models',
-        current: models.current,
+        current,
         routable: models.routable,
         groups: models.groups,
         failures: models.failures,

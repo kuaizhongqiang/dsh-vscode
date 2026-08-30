@@ -13,7 +13,7 @@
 
 - **连接管理**：本地 / 远程双模式，状态栏实时显示连接状态；事件流断线自动重连。
   - **本地模式**（默认）：配置 `dsh.localServerPath` 后自动拉起 `dsh web` 并连接（若 3080 端口已有 DSH 实例在运行则直接复用，不重复拉起）；也可直接连默认 `http://127.0.0.1:3080`。
-  - **远程模式**：开启 `dsh.remote` 并填入 Cloudflare cookie（`dsh.cloudflareCookie`），自动作为认证头发送，改配置自动重连。
+  - **远程模式**：开启 `dsh.remote` 并填入 DSH 启动 token（`dsh.token`），扩展自动换取会话 cookie 认证，改配置自动重连。
 - **侧边栏入口式首页**（会话 / 拉起服务 / 进入配置 / 插件库 / 模式列表）：
   - 首页高亮当前工作区路径，显示连接状态与各入口概览，可进入子视图并返回；
   - **会话列表**：默认只显示当前工作区的会话（可切换查看全部），运行中 / 轮次 / 更新时间一目了然；**单击会话条目直接打开聊天面板**，支持新建、重命名、停止、在浏览器打开；
@@ -41,27 +41,22 @@
 - VSCode ≥ 1.90（Node ≥ 20）
 - 一个可访问的 DSH 实例（`dsh web` 已启动）。默认连接 `http://127.0.0.1:3080`。
 - 远程访问时，DSH 需用 `--trusted-host <你的域名>` 启动（`/api` 信任围栏），否则 /api 会返回 403。
-- 如果远程域名在 **Cloudflare Access**（Zero Trust）等访问控制后面，`/api` 请求会被 302 重定向到登录页，需要配置认证（见下文）。
+- DSH 对 `/api` 与事件流做了浏览器会话认证：非浏览器客户端需用**进程启动 token** 换取会话 cookie（见下文「远程访问」）。
 
-### 远程访问（Cloudflare Access 等访问控制）
+### 远程访问（DSH token 认证）
 
-DSH 的 Web 端能访问是因为浏览器持有 `CF_Authorization` 会话 cookie，而扩展是无 cookie 的机器客户端。
+DSH 每次启动 `dsh web` 都会打印一个进程启动 token（`?token=…`）。浏览器用它换取浏览器的会话 cookie；
+扩展作为机器客户端，用**同一个 token** 换取可复用的会话 cookie，认证所有 `/api` 请求与 `remote.mux` 事件流。
 
-**推荐方式：远程模式 + Cloudflare cookie（设置页一键配置）**
-1. 设置页（侧边栏「进入配置」）或设置 JSON 中开启 `dsh.remote`（远程模式）。
-2. 在浏览器登录 `https://dsh.your-domain`，DevTools → Application → Cookies 里复制 `CF_Authorization` 的值。
-3. 填入 `dsh.cloudflareCookie`（设置页的「Cloudflare Cookie」字段），扩展自动作为 `Cookie: CF_Authorization=…` 请求头发送（/api 与事件流均带），改配置后自动重连。
+**配置方式（无需任何 Cloudflare / 反代 cookie）**
+1. 在服务器上启动 DSH，记下打印的 token（形如 `dsh web → http://127.0.0.1:3080/?token=<TOKEN>`）。
+2. 设置页（侧边栏「进入配置」）或设置 JSON：
+   - 开启 `dsh.remote`（远程模式）；
+   - 填入 `dsh.serverUrl` 为远程地址（如 `https://dsh.your-domain`）；
+   - 填入 `dsh.token` 为上面记下的 token。
+3. 扩展连接时自动 `GET {base}/?token=…` 换取 `dsh-auth-*` 会话 cookie，并携带到所有 `/api` 与事件流请求；改配置后自动重连。
 
-**方式 B：服务令牌（无需 cookie）**
-1. Cloudflare Zero Trust → Access → Service Auth → 创建 Service Token，得到 Client ID 与 Client Secret。
-2. Access → Applications → dsh 应用 → 策略中把该 Service Token 加入允许身份。
-3. 扩展设置：
-   ```json
-   "dsh.extraHeaders": {
-     "CF-Access-Client-Id": "<你的 Client ID>",
-     "CF-Access-Client-Secret": "<你的 Client Secret>"
-   }
-   ```
+本地未开启 token 的 DSH 无需配置 `dsh.token`（留空即可）。
 
 ### 本地服务路径（dsh.localServerPath）
 
@@ -95,7 +90,7 @@ pnpm build          # 产出 dist/extension.js
 
 ```bash
 pnpm exec vsce package --no-dependencies
-code --install-extension dsh-vscode-0.1.0.vsix
+code --install-extension dsh-vscode-0.2.0.vsix
 ```
 
 ## 配置
@@ -103,8 +98,8 @@ code --install-extension dsh-vscode-0.1.0.vsix
 | 设置 | 默认 | 说明 |
 |---|---|---|
 | `dsh.serverUrl` | `http://127.0.0.1:3080` | DSH 服务地址（本地模式可留空用默认，远程模式必填远程地址） |
-| `dsh.remote` | `false` | 连接模式开关：`true` = 远程模式（配 Cloudflare cookie 认证），`false` = 本地模式（可拉起本地 `dsh web`） |
-| `dsh.cloudflareCookie` | `""` | 远程模式下 Cloudflare Access 的 `CF_Authorization` cookie 值，非空时自动作为 `Cookie` 请求头发送 |
+| `dsh.remote` | `false` | 连接模式开关：`true` = 远程模式（配 token 认证），`false` = 本地模式（可拉起本地 `dsh web`） |
+| `dsh.token` | `""` | DSH 进程启动 token（`dsh web` 打印的 `?token=…` 值）；扩展自动换取会话 cookie 认证 `/api` 与事件流 |
 | `dsh.localServerPath` | `""` | 本地模式下 dsh 安装 / 启动目录（应包含 `dsh.cmd` / `dsh` 启动器）。样例：Windows `D:\dsh`，macOS/Linux `~/dsh` |
 | `dsh.autoConnect` | `true` | 启动后自动连接（本地模式下若已配置 `localServerPath` 会自动拉起服务） |
 | `dsh.autoAttachWorkspace` | `true` | 自动创建 / 关联当前文件夹为 DSH 工作区 |
@@ -116,7 +111,7 @@ code --install-extension dsh-vscode-0.1.0.vsix
 | `dsh.maxToolResultChars` | `4000` | 工具调用结果在面板中的最大展示字符数 |
 | `dsh.promptMode` | `steer` | 发送消息模式：`steer` = 插话（立即处理，与 DSH Web 一致），`queue` = 排队（等当前回合结束） |
 | `dsh.pricing` | 内置官方价 | 用量栏费用估算的价格表：按模型 id 的每百万 tokens 单价（¥），默认内置 DeepSeek 官方峰谷价与小米 MiMo 价，官方调价后可覆盖 |
-| `dsh.extraHeaders` | `{}` | 附加到每个 `/api` 请求与事件流 WebSocket 握手头的自定义请求头（见「远程访问」） |
+| `dsh.extraHeaders` | `{}` | 附加到每个 `/api` 请求与 `remote.mux` 事件流 WebSocket 握手头的自定义请求头 |
 
 ## 命令
 
@@ -147,17 +142,18 @@ code --install-extension dsh-vscode-0.1.0.vsix
 ```
 src/
 ├── extension.ts         激活入口：连接生命周期、命令、工作区自动关联、设置与本地服务编排
-├── config.ts            设置读写（含 remote / cloudflareCookie / localServerPath 与 Cookie 头注入）
+├── config.ts            设置读写（含 remote / token / localServerPath 与自定义请求头）
 ├── statusBar.ts         状态栏
 ├── sidebar.ts           侧边栏入口式首页 + 会话 / 服务 / 设置 / 插件 / 模式多视图导航
-├── sessionStore.ts      会话/工作区缓存（session.list + mux/host 帧增量）
+├── sessionStore.ts      会话/工作区缓存（session.list + host 帧增量）
 ├── localServer.ts       本地 dsh web 服务生命周期（spawn / 就绪轮询 / 终止，路径校验）
 ├── plugins.ts           插件库数据源（DSH_HOME 已安装 + dsh-plugins 合集仓库可用）
 ├── client/
-│   ├── types.ts         DSH 线上协议类型（对齐 @deepseek-ai/dsh-host-apiproxy）
-│   ├── rpc.ts           /api 单发 RPC 客户端（client-request / server-response 信封）
-│   ├── mux.ts           /api/events.mux WebSocket 客户端（自动重连）
-│   └── connection.ts    高层封装：session/workspace 操作、审批/提问应答、事件分发
+│   ├── types.ts         DSH 线上协议类型（对齐 Typert Remote / API Gateway）
+│   ├── auth.ts          token → 会话 cookie 换取（dsh-auth-*）
+│   ├── rpc.ts           /api/{ns}/{method} 单发 RPC 客户端（client-request / server-response 信封）
+│   ├── mux.ts           /api/remote.mux 逻辑流 WebSocket 客户端（open/item/end/error，自动重连）
+│   └── connection.ts    高层封装：session/workspace 操作、$events 审批/提问应答、事件分发
 └── chat/
     ├── types.ts         渲染模型 + webview 双向消息协议（含 @ 文件候选）
     ├── chatModel.ts     会话消息模型（历史 + 流式，seq 去重）
@@ -167,23 +163,31 @@ media/webview.html       聊天 UI（零依赖，内联 CSS/JS：斜杠命令 / 
 
 ### 协议要点（无需安装任何 DSH npm 包）
 
-- 单发 RPC：`POST {base}/api/{method}`，body 为
-  `{"type":"client-request","rpcId":"<uuid>","method":"…","payload":{…}}`，
+- 单发 RPC：`POST {base}/api/{namespace}/{method}`，body 为
+  `{"type":"client-request","rpcId":"<uuid>","method":"session/list","payload":{"args":{…}}}`，
   响应 `{"type":"server-response","rpcId":"…","result":{"ok":true,"value":…}|{"ok":false,"error":…}}`。
-- 事件流：WebSocket `{base}/api/events.mux`，每条消息是 `server-request` 信封，payload 为 mux 帧
-  （`session/event`、`session/projection`、`approval/requested`、`question/requested`、`session/jobs`…）。
-- 审批 / 提问应答：`POST {base}/api/respond`，body 为 `client-response`，rpcId 回显帧的 rpcId。
-- 会话事件：`user/message`、`assistant/chunk`（text-delta / reasoning-delta / tool-call-delta…）、
-  `assistant/message`、`tool/call`、`tool/result`、`turn/end` 等。
+  所有 Remote 载荷统一包在 `{ args }` 中。方法如 `session/list`、`session/create`、`session/prompt`
+  （`requestId` 必填）、`session/page`、`session/follow`（流）、`session/control`（流）、
+  `workspace/create`、`workspace/follow`（流）、`$events/result`。
+- 逻辑流：WebSocket `{base}/api/remote.mux`，客户端发 `{type:'open', streamId, endpoint, payload:{args}}`
+  / `{type:'cancel', streamId}`，服务端回 `{type:'item'|'end'|'error', streamId, …}`。
+  `$events` 流投递转发的应用事件（`ready` / `emit` / `waterfall` / `cancel`）；
+  `session/follow` / `session/control` / `workspace/follow` 分别投递会话日志 / 队列·任务·投影 / 工作区。
+- 审批 / 提问：经 `$events` 流的 `waterfall` 帧到达（`approval/request`、`user-questions/request`），
+  通过 `POST {base}/api/$events/result`（`{ clientId, eventId, outcome }`）应答。
+- 认证：`GET {base}/?token=<launchToken>` → 303 `Set-Cookie: dsh-auth-<hash>=v1…`，
+  扩展把该 cookie 作为 `Cookie` 头发送到所有 `/api` 请求与 `remote.mux` 握手。
+- 会话事件（follow 流内）：`user/message`、`assistant/chunk`（text-delta / reasoning-delta /
+  tool-call-delta…）、`assistant/message`、`tool/call`、`tool/result`、`turn/end` 等。
 
 ## 测试
 
 ```bash
-# 协议冒烟测试（只读：describe/list/history + mux 帧）
-node --experimental-strip-types scripts/smoke.mts http://127.0.0.1:3080
+# 协议冒烟测试（只读：list/page/modelCatalog + remote.mux 逻辑流）
+node --experimental-strip-types scripts/smoke.mts http://127.0.0.1:3080 [token]
 
-# 端到端（会新建会话并发一条极小 prompt，验证 创建→prompt→流式→history）
-node --experimental-strip-types scripts/e2e.mts http://127.0.0.1:3080
+# 端到端（会新建会话并发一条极小 prompt，验证 创建→prompt→follow 流→history）
+node --experimental-strip-types scripts/e2e.mts http://127.0.0.1:3080 [token]
 
 pnpm typecheck   # tsc --noEmit
 pnpm build       # esbuild
@@ -191,7 +195,7 @@ pnpm test        # vitest 单元测试
 node scripts/check-webview-js.mjs   # webview 内联 JS 语法校验
 ```
 
-## 已知限制（v0.1.0）
+## 已知限制（v0.2.0）
 
 - 历史分页「加载更多」尚未实现（仅加载最近一页；`session.history` 的 `maxMessages` 语义是「最近 N 条消息的全部事件」，事件极密的会话一次可能拉取数万条）。
 - 费用按**当前会话模型**的官方价估算累计值（会话内混用多模型时不能精确分摊到各模型，可在 `dsh.pricing` 覆盖价格）。
@@ -207,7 +211,7 @@ node scripts/check-webview-js.mjs   # webview 内联 JS 语法校验
   [Open VSX](https://open-vsx.org) 发布：在仓库 Secrets 中配置 `OPEN_VSX_TOKEN` 后自动生效。
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0   # 触发发布流水线
+git tag v0.2.0 && git push origin v0.2.0   # 触发发布流水线
 ```
 
 ## License

@@ -46,6 +46,21 @@ export interface ClientResponse {
 
 export type SessionId = string
 
+/** One Session list entry as returned by session/list. */
+export interface SessionSummary {
+  sessionId: SessionId
+  updatedAt: number
+  running: boolean
+  blank: boolean
+  parentSessionId?: SessionId
+  origin?: 'subagent'
+  cwd?: string
+  projections?: {
+    asOfSeq: number
+    values: Record<string, unknown>
+  }
+}
+
 export interface SessionListEntry {
   sessionId: SessionId
   updatedAt: number
@@ -365,4 +380,243 @@ export interface AgentPresetEntry {
   id: string
   trust: 'system' | 'user'
   isDefault: boolean
+}
+
+// ---- New DSH wire protocol (Typert Remote / API Gateway) ----
+// The current DSH speaks namespace/method endpoints with { args } payloads and
+// carries streams over /api/remote.mux. Types below mirror the wire exactly.
+
+/** Standard Remote payload wrapper: every unary/stream method receives { args }. */
+export interface RemoteArgsPayload<T = unknown> {
+  args: T
+}
+
+/** Durable Session address for page/follow/prompt operations. */
+export type SessionAddress =
+  | { kind: 'session'; sessionId: SessionId }
+  | { kind: 'subagent'; parentSessionId: SessionId; childSessionId: SessionId; mode: 'one-shot' | 'continuable' }
+
+// ---- remote.mux stream frames ----
+
+export interface RemoteStreamOpenMessage {
+  type: 'open'
+  streamId: string
+  endpoint: string
+  payload: unknown
+}
+
+export interface RemoteStreamCancelMessage {
+  type: 'cancel'
+  streamId: string
+}
+
+export type RemoteStreamClientMessage = RemoteStreamOpenMessage | RemoteStreamCancelMessage
+
+export interface RemoteStreamItem {
+  type: 'item'
+  streamId: string
+  value?: unknown
+}
+
+export interface RemoteStreamEnd {
+  type: 'end'
+  streamId: string
+}
+
+export interface RemoteStreamError {
+  type: 'error'
+  streamId: string
+  error: { code: string; message: string; details: object }
+}
+
+export type RemoteStreamServerMessage = RemoteStreamItem | RemoteStreamEnd | RemoteStreamError
+
+/** WebSocket route carrying every Typert Remote stream. */
+export const REMOTE_STREAM_MUX_PATH = '/api/remote.mux'
+/** Gateway-internal logical stream carrying selected Cordis events. */
+export const REMOTE_EVENT_STREAM_ENDPOINT = '$events'
+/** Empty payload used to open the forwarded-event stream. */
+export const REMOTE_EVENT_STREAM_PAYLOAD = { args: {} } as const
+/** Unary endpoint returning one Remote Event outcome. */
+export const REMOTE_EVENT_RESULT_ENDPOINT = '$events/result'
+
+// ---- $events forwarded-event frames ----
+
+export interface RemoteEventReadyFrame {
+  type: 'ready'
+  clientId: string
+  host: { home: string }
+}
+
+export interface RemoteEventEmitFrame {
+  type: 'emit'
+  event: string
+  args: readonly unknown[]
+}
+
+export interface RemoteEventInvocationFrame {
+  type: 'waterfall'
+  event: string
+  eventId: string
+  agentId: string
+  request: Readonly<Record<string, unknown>>
+}
+
+export interface RemoteEventCancellationFrame {
+  type: 'cancel'
+  eventId: string
+}
+
+export type RemoteEventDownlinkFrame =
+  | RemoteEventReadyFrame
+  | RemoteEventEmitFrame
+  | RemoteEventInvocationFrame
+  | RemoteEventCancellationFrame
+
+/** Client response to one scoped Remote Event delivery. */
+export interface RemoteEventResultPayload {
+  clientId: string
+  eventId: string
+  outcome:
+    | { kind: 'next' }
+    | { kind: 'result'; value?: unknown }
+    | { kind: 'rejected'; error: { name: string; message: string; code?: string; details?: unknown } }
+}
+
+// ---- session follow / page / control ----
+
+/** One raw Session event in the Remote journal. */
+export interface SessionWireEvent {
+  type: string
+  seq: number
+  time: number
+  data: unknown
+  sourceEventSeqs?: number[]
+  surfaceOp?: unknown
+}
+
+/** One history-page record: a raw event or a packed Assistant delta run. */
+export type SessionHistoryRecord =
+  | { type: 'event'; event: SessionWireEvent }
+  | { type: 'chunks'; event: { type: string; seq: number; time: number; data: unknown } }
+
+/** Session follow request. */
+export interface SessionFollowRequest {
+  address: SessionAddress
+  maxMessages?: number
+}
+
+/** Complete opening window followed by ordered events. */
+export type SessionFollowFrame =
+  | {
+    type: 'snapshot'
+    header: unknown
+    cursor: number
+    records: SessionHistoryRecord[]
+    hasMore: boolean
+    projections: { asOfSeq: number; values: Record<string, unknown> }
+  }
+  | SessionHistoryRecord
+
+/** One contiguous backwards page of a Session log. */
+export interface SessionPage {
+  records: SessionHistoryRecord[]
+  hasMore: boolean
+}
+
+/** Session page request. */
+export interface SessionPageRequest {
+  address: SessionAddress
+  throughSeq: number
+  beforeSeq?: number
+  maxMessages?: number
+}
+
+/** One pending inbox occurrence in the authoritative queue snapshot. */
+export interface SessionQueuedItem {
+  id: string
+  placement: 'queued' | 'steering' | 'context'
+  rpcId?: string
+  message: { id: string; content: unknown[] }
+}
+
+/** Browser-safe background-job row. */
+export interface SessionJob {
+  id: string
+  kind: string
+  label: string
+  status: 'running' | 'stopping' | 'completed' | 'killed' | 'failed'
+  detail?: string
+  startedAt: number
+  finishedAt?: number
+}
+
+/** Host-wide live control state. Each generation starts with one baseline. */
+export type SessionControlFrame =
+  | {
+    type: 'baseline'
+    value: {
+      queues: Record<SessionId, SessionQueuedItem[]>
+      jobs: Record<SessionId, SessionJob[]>
+      projections: Record<SessionId, { asOfSeq: number; values: Record<string, unknown> }>
+    }
+  }
+  | { type: 'queue'; sessionId: SessionId; items: SessionQueuedItem[] }
+  | { type: 'jobs'; sessionId: SessionId; jobs: SessionJob[] }
+  | { type: 'projection'; sessionId: SessionId; key: string; value: unknown; seq: number }
+
+// ---- workspace ----
+
+export interface WorkspaceBaseline {
+  items: WorkspaceView[]
+  archivedSessionIds: string[]
+}
+
+export type WorkspaceFollowFrame =
+  | { type: 'baseline'; value: WorkspaceBaseline }
+  | { type: 'upsert'; workspace: WorkspaceView }
+  | { type: 'remove'; workspaceId: WorkspaceId }
+  | { type: 'order'; workspaceIds: WorkspaceId[] }
+  | { type: 'archived'; archivedSessionIds: string[] }
+
+// ---- model catalog ----
+
+export interface ModelCatalog {
+  default: { provider: string; model: string; reasoningEffort?: string }
+  routableProviders: string[]
+  groups: ModelProviderGroup[]
+  failures: { id: string; name: string; message: string }[]
+}
+
+// ---- approval / question waterfall request payloads (via $events) ----
+
+/** Payload of an `approval/request` waterfall event. */
+export interface ApprovalRequestWire {
+  sessionId?: string
+  agentId?: string
+  toolName: string
+  callId?: string
+  reason?: string
+  [k: string]: unknown
+}
+
+/** Payload of a `user-questions/request` waterfall event. */
+export interface UserQuestionsRequestWire {
+  questions: QuestionItem[]
+  [k: string]: unknown
+}
+
+/** Response for an approval/request waterfall. */
+export interface ApprovalResponseWire {
+  sessionId?: string
+  approvalId?: string
+  outcome: 'allowed-once' | 'rejected' | string
+  [k: string]: unknown
+}
+
+/** Response for a user-questions/request waterfall. */
+export interface UserQuestionsResponseWire {
+  sessionId?: string
+  answer: { answers: { id: string; selected: string[]; custom?: string }[] }
+  [k: string]: unknown
 }

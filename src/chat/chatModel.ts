@@ -9,6 +9,7 @@ import type {
   AssistantMessageEvent,
   ContentBlock,
   SessionEvent,
+  SessionHistoryRecord,
   SessionId,
   StreamChunk,
   ToolCallEvent,
@@ -51,7 +52,7 @@ export class ChatModel {
   private streaming: StreamingState | undefined
   private loaded = false
   private disposed = false
-  private readonly offConnection: () => void
+  private readonly followHandle: { close: () => void } | undefined
   private liveBuffer: SessionEvent[] = []
 
   constructor(options: ChatModelOptions) {
@@ -59,14 +60,14 @@ export class ChatModel {
     this.sessionId = options.sessionId
     this.onOp = options.onOp
     this.maxToolResultChars = options.maxToolResultChars ?? MAX_TOOL_RESULT_CHARS
-    // Subscribe to live events first so nothing falls into the history/live gap.
-    this.offConnection = this.connection.onEvent((event) => {
-      if (event.kind !== 'session-event' || event.sessionId !== this.sessionId) return
+    // Follow the durable session log first so nothing falls into the
+    // history/live gap. The follow stream delivers a snapshot then live frames.
+    this.followHandle = this.connection.followSession(this.sessionId, (event) => {
       if (!this.loaded) {
-        this.liveBuffer.push(event.event)
+        this.liveBuffer.push(event)
         return
       }
-      this.applyEvent(event.event, true)
+      this.applyEvent(event, true)
     })
   }
 
@@ -75,9 +76,11 @@ export class ChatModel {
     if (this.loaded) return
     try {
       const result = await this.connection.history(this.sessionId, maxMessages)
-      for (const entry of result.events) {
-        if (entry.event.seq > this.maxSeq) this.maxSeq = entry.event.seq
-        this.applyEvent(entry.event, false)
+      for (const record of result.records) {
+        const event = recordToEvent(record)
+        if (event === undefined) continue
+        if (event.seq > this.maxSeq) this.maxSeq = event.seq
+        this.applyEvent(event, false)
       }
       this.loaded = true
       for (const event of this.liveBuffer) this.applyEvent(event, true)
@@ -92,7 +95,7 @@ export class ChatModel {
 
   dispose(): void {
     this.disposed = true
-    this.offConnection()
+    this.followHandle?.close()
   }
 
   snapshot(): RenderMessage[] {
@@ -384,3 +387,11 @@ export function extractText(blocks: ContentBlock[]): string {
 }
 
 export type { HostToWebviewOp }
+
+/** Convert one SessionHistoryRecord (raw event or packed chunk row) to a
+ * SessionEvent for rendering. Packed chunk rows are skipped here; their deltas
+ * are only meaningful in the live stream. */
+function recordToEvent(record: SessionHistoryRecord): SessionEvent | undefined {
+  if (record.type !== 'event') return undefined
+  return record.event as unknown as SessionEvent
+}

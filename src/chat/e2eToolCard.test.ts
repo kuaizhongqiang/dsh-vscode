@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url'
 import { JSDOM, type DOMWindow } from 'jsdom'
 import { ChatModel } from './chatModel.ts'
 import type { DshConnection, DshEvent } from '../client/connection.ts'
-import type { SessionEvent, SessionHistoryResult } from '../client/types.ts'
+import type { SessionEvent, SessionPage } from '../client/types.ts'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const fixturePath = join(__dirname, '__fixtures__', 'real-history-40.json')
@@ -30,15 +30,18 @@ const fixture: SessionEvent[] = (() => {
 })()
 
 interface FakeConnection {
-  onEvent: (listener: (event: DshEvent) => void) => () => void
-  history: () => Promise<SessionHistoryResult>
+  followSession: (sessionId: string, onEvent: (event: SessionEvent) => void) => { close: () => void }
+  history: () => Promise<SessionPage>
 }
 
 function makeModel(): { model: ChatModel; ops: unknown[]; error: Error | undefined } {
   const ops: unknown[] = []
   const conn: FakeConnection = {
-    onEvent: () => () => undefined,
-    history: async () => ({ events: fixture.map((event) => ({ event })), hasMore: false }),
+    followSession: () => ({ close: () => {} }),
+    history: async () => ({
+      records: fixture.map((event) => ({ type: 'event' as const, event })),
+      hasMore: false,
+    }),
   }
   const model = new ChatModel({
     connection: conn as unknown as DshConnection,
@@ -143,20 +146,20 @@ describe('issue #12 e2e: real history → ChatModel → webview', () => {
     const live = fixture.slice(Math.max(0, fixture.length - 9000))
     const { model, ops, pushLive } = (() => {
       const ops: unknown[] = []
-      let listener: ((event: DshEvent) => void) | undefined
+      let listener: ((event: SessionEvent) => void) | undefined
       const conn: FakeConnection = {
-        onEvent: (cb) => {
-          listener = cb
-          return () => { listener = undefined }
+        followSession: (_sessionId, onEvent) => {
+          listener = onEvent
+          return { close: () => { listener = undefined } }
         },
-        history: async () => ({ events: [], hasMore: false }),
+        history: async () => ({ records: [], hasMore: false }),
       }
       const m = new ChatModel({
         connection: conn as unknown as DshConnection,
         sessionId: 'real-session',
         onOp: (op) => ops.push(op),
       })
-      return { model: m, ops, pushLive: (e: SessionEvent) => listener?.({ kind: 'session-event', sessionId: 'real-session', event: e }) }
+      return { model: m, ops, pushLive: (e: SessionEvent) => listener?.(e) }
     })()
     await model.load(40)
     // Feed the tail as a live event stream.

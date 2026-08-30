@@ -8,19 +8,22 @@ function event(seq: number, type: string, data: Record<string, unknown>, time = 
 }
 
 interface FakeConnection {
-  onEvent: (listener: (event: DshEvent) => void) => () => void
-  history: (sessionId: string, maxMessages: number) => Promise<{ events: { event: SessionEvent }[] }>
+  followSession: (sessionId: string, onEvent: (event: SessionEvent) => void) => { close: () => void }
+  history: (sessionId: string, maxMessages: number) => Promise<{ records: { type: 'event'; event: SessionEvent }[]; hasMore: boolean }>
 }
 
 function makeModel(historyEvents: SessionEvent[]): { model: ChatModel; ops: unknown[]; pushLive: (e: SessionEvent) => void } {
   const ops: unknown[] = []
-  let listener: ((event: DshEvent) => void) | undefined
+  let listener: ((event: SessionEvent) => void) | undefined
   const conn: FakeConnection = {
-    onEvent: (cb) => {
-      listener = cb
-      return () => { listener = undefined }
+    followSession: (_sessionId, onEvent) => {
+      listener = onEvent
+      return { close: () => { listener = undefined } }
     },
-    history: async () => ({ events: historyEvents.map((e) => ({ event: e })) }),
+    history: async () => ({
+      records: historyEvents.map((e) => ({ type: 'event' as const, event: e })),
+      hasMore: false,
+    }),
   }
   const model = new ChatModel({
     connection: conn as unknown as DshConnection,
@@ -30,7 +33,7 @@ function makeModel(historyEvents: SessionEvent[]): { model: ChatModel; ops: unkn
   return {
     model,
     ops,
-    pushLive: (e) => listener?.({ kind: 'session-event', sessionId: 's1', event: e }),
+    pushLive: (e) => listener?.(e),
   }
 }
 

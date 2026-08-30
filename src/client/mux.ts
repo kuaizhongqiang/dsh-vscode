@@ -1,30 +1,49 @@
 /**
- * Mux event stream client: a WebSocket to {base}/api/events.mux.
+ * Remote stream mux client: a WebSocket to {base}/api/remote.mux.
  *
- * The server pushes JSON server-request envelopes whose payload is a MuxFrame
- * (session/event, session/subscribed, session/projection, approval/requested,
- * question/requested, session/jobs, …). This client reconnects with backoff
- * and dispatches parsed frames to listeners.
+ * The current DSH carries every logical stream (session/follow, session/control,
+ * workspace/follow, $events) over one multiplexed WebSocket. The client opens a
+ * stream by sending `{ type:'open', streamId, endpoint, payload:{args} }` and
+ * the server replies with `{ type:'item', streamId, value }` frames, terminating
+ * each stream with `{ type:'end'|'error', streamId }`.
  *
- * Uses the `ws` package (not the Node global WebSocket) so the handshake can
- * carry extra headers — required behind Cloudflare Access / reverse proxies
- * that authenticate API traffic (service token or session cookie).
+ * This client reconnects with backoff and re-opens the previously requested
+ * streams. It uses the `ws` package (not the Node global WebSocket) so the
+ * handshake can carry the auth `Cookie` header.
  */
 
 import WebSocket from 'ws'
-import type { MuxFrame, ServerRequest } from './types.ts'
+import type {
+  RemoteStreamClientMessage,
+  RemoteStreamOpenMessage,
+  RemoteStreamServerMessage,
+} from './types.ts'
 
-export interface MuxStreamCallbacks {
+/** Callbacks scoped to one logical stream. */
+export interface RemoteStreamCallbacks {
+  onItem?: (value: unknown) => void
+  onEnd?: () => void
+  onError?: (error: unknown) => void
+}
+
+/** One requested (or active) logical stream. */
+interface StreamSlot {
+  readonly streamId: string
+  readonly endpoint: string
+  readonly payload: unknown
+  readonly callbacks: RemoteStreamCallbacks
+}
+
+export interface RemoteMuxCallbacks {
   onOpen?: () => void
   onClose?: (reason: string) => void
   onError?: (error: unknown) => void
-  onFrame?: (rpcId: string, frame: MuxFrame) => void
 }
 
-export interface MuxStreamOptions {
+export interface RemoteMuxOptions {
   baseUrl: string
-  /** Extra headers for the WebSocket handshake (e.g. Cloudflare Access auth). */
-  extraHeaders?: Record<string, string>
+  /** Auth cookie / extra headers for the WebSocket handshake. */
+  requestHeaders?: Record<string, string>
   /** Reconnect interval after an unexpected close (ms). */
   reconnectIntervalMs?: number
   /** Max consecutive reconnect attempts before giving up (0 = unlimited). */
@@ -32,22 +51,25 @@ export interface MuxStreamOptions {
 }
 
 const SOCKET_CLOSED_BY_US = 4000
+const OPENED_STREAM_PREFIX = 'ds'
 
-export class MuxStreamClient {
+export class RemoteMuxClient {
   private readonly baseUrl: string
-  private readonly extraHeaders: Record<string, string>
+  private readonly requestHeaders: Record<string, string>
   private readonly reconnectIntervalMs: number
   private readonly maxReconnects: number
-  private readonly callbacks: MuxStreamCallbacks
+  private readonly callbacks: RemoteMuxCallbacks
   private socket: WebSocket | undefined
   private closedByUs = false
   private reconnectAttempts = 0
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined
   private aborted = false
+  private readonly streams = new Map<string, StreamSlot>()
+  private streamCounter = 0
 
-  constructor(options: MuxStreamOptions, callbacks: MuxStreamCallbacks = {}) {
+  constructor(options: RemoteMuxOptions, callbacks: RemoteMuxCallbacks = {}) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '')
-    this.extraHeaders = options.extraHeaders ?? {}
+    this.requestHeaders = { ...(options.requestHeaders ?? {}) }
     this.reconnectIntervalMs = options.reconnectIntervalMs ?? 3000
     this.maxReconnects = options.maxReconnects ?? 0
     this.callbacks = callbacks
@@ -63,7 +85,7 @@ export class MuxStreamClient {
     this.openSocket()
   }
 
-  /** Close for good; stops reconnecting. */
+  /** Close for good; stops reconnecting and drops all streams. */
   close(): void {
     this.aborted = true
     this.closedByUs = true
@@ -79,15 +101,67 @@ export class MuxStreamClient {
       }
       this.socket = undefined
     }
+    for (const slot of [...this.streams.values()]) {
+      this.streams.delete(slot.streamId)
+      slot.callbacks.onEnd?.()
+    }
+  }
+
+  /**
+   * Open one logical stream. Returns a handle to cancel it. If the socket is
+   * not yet connected, the open is queued and sent after connect.
+   */
+  openStream(endpoint: string, payload: unknown, callbacks: RemoteStreamCallbacks): { close: () => void } {
+    const streamId = `${OPENED_STREAM_PREFIX}${++this.streamCounter}`
+    const slot: StreamSlot = { streamId, endpoint, payload, callbacks }
+    this.streams.set(streamId, slot)
+    this.sendOpen(slot)
+    return {
+      close: () => {
+        this.cancelStream(streamId)
+      },
+    }
+  }
+
+  /** Cancel one logical stream. */
+  private cancelStream(streamId: string): void {
+    const slot = this.streams.get(streamId)
+    if (slot === undefined) return
+    this.streams.delete(streamId)
+    if (this.socket !== undefined && this.socket.readyState === WebSocket.OPEN) {
+      const message: RemoteStreamClientMessage = { type: 'cancel', streamId }
+      this.sendJson(message)
+    }
+    slot.callbacks.onEnd?.()
+  }
+
+  private sendOpen(slot: StreamSlot): void {
+    if (this.socket === undefined || this.socket.readyState !== WebSocket.OPEN) return
+    const message: RemoteStreamOpenMessage = {
+      type: 'open',
+      streamId: slot.streamId,
+      endpoint: slot.endpoint,
+      payload: slot.payload,
+    }
+    this.sendJson(message)
+  }
+
+  private sendJson(message: RemoteStreamClientMessage): void {
+    if (this.socket === undefined || this.socket.readyState !== WebSocket.OPEN) return
+    try {
+      this.socket.send(JSON.stringify(message))
+    } catch {
+      // ignored; the close handler owns recovery
+    }
   }
 
   private openSocket(): void {
     if (this.aborted) return
-    const url = new URL('/api/events.mux', this.baseUrl)
+    const url = new URL('/api/remote.mux', this.baseUrl)
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
     let socket: WebSocket
     try {
-      socket = new WebSocket(url, { headers: this.extraHeaders })
+      socket = new WebSocket(url, { headers: this.requestHeaders })
     } catch (error) {
       this.emitError(error)
       return
@@ -96,19 +170,20 @@ export class MuxStreamClient {
 
     socket.on('open', () => {
       this.reconnectAttempts = 0
+      // Re-open every requested stream on this fresh generation.
+      for (const slot of this.streams.values()) this.sendOpen(slot)
       this.callbacks.onOpen?.()
     })
 
     socket.on('message', (data) => {
-      let envelope: ServerRequest
+      let message: RemoteStreamServerMessage
       try {
         const raw = typeof data === 'string' ? data : data.toString()
-        envelope = JSON.parse(raw) as ServerRequest
+        message = JSON.parse(raw) as RemoteStreamServerMessage
       } catch {
         return // malformed frame — drop
       }
-      if (envelope.type !== 'server-request') return
-      this.callbacks.onFrame?.(envelope.rpcId, envelope.payload as MuxFrame)
+      this.handleServerMessage(message)
     })
 
     socket.on('close', (code, reason) => {
@@ -121,6 +196,27 @@ export class MuxStreamClient {
       // 'close' always follows 'error'; the close handler owns recovery.
       this.emitError(error)
     })
+  }
+
+  private handleServerMessage(message: RemoteStreamServerMessage): void {
+    const slot = this.streams.get(message.streamId)
+    switch (message.type) {
+      case 'item': {
+        slot?.callbacks.onItem?.(message.value)
+        return
+      }
+      case 'end': {
+        if (slot !== undefined) this.streams.delete(message.streamId)
+        slot?.callbacks.onEnd?.()
+        return
+      }
+      case 'error': {
+        if (slot !== undefined) this.streams.delete(message.streamId)
+        slot?.callbacks.onError?.(message.error)
+        slot?.callbacks.onEnd?.()
+        return
+      }
+    }
   }
 
   private scheduleReconnect(): void {

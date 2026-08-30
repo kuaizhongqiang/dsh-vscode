@@ -2,7 +2,7 @@
   "name": "dsh-vscode",
   "displayName": "DSH - DeepSeek Harness",
   "description": "在 VSCode 中连接 DeepSeek Harness（DSH）实例：会话列表、流式聊天、工具调用、审批与提问处理。",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "kuaizhongqiang",
   "license": "MIT",
   "icon": "media/dsh-icon.png",
@@ -91,17 +91,17 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "附加到每个 /api 请求和事件流 WebSocket 握手头的自定义请求头。远程部署在 Cloudflare Access 等访问控制后面时，可填 CF-Access-Client-Id / CF-Access-Client-Secret（服务令牌）或 Cookie: CF_Authorization=...（浏览器会话）。"
+          "description": "附加到每个 /api 请求和 remote.mux 事件流 WebSocket 握手头的自定义请求头。"
         },
         "dsh.remote": {
           "type": "boolean",
           "default": false,
-          "description": "连接模式：true = 远程模式（直连远程 DSH，可配合 Cloudflare cookie 认证）；false = 本地模式（可配置 dsh.localServerPath 拉起本地 dsh web）。"
+          "description": "连接模式：true = 远程模式（直连远程 DSH，配 dsh.token 认证）；false = 本地模式（可配置 dsh.localServerPath 拉起本地 dsh web）。"
         },
-        "dsh.cloudflareCookie": {
+        "dsh.token": {
           "type": "string",
           "default": "",
-          "description": "远程模式下 Cloudflare Access 的 CF_Authorization cookie 值；非空时自动作为 Cookie 请求头发送给每个 /api 请求与事件流 WebSocket 握手。"
+          "description": "DSH 进程启动 token（`dsh web` 启动时打印的 `?token=` 值）。扩展用它换取浏览器会话 cookie，认证所有 /api 请求与 remote.mux 事件流。适用于远程部署；本地未开启 token 时可留空。"
         },
         "dsh.localServerPath": {
           "type": "string",

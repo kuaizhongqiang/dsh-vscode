@@ -373,18 +373,17 @@ export class SessionsTreeProvider implements vscode.TreeDataProvider<TreeNode> {
       label: '远程模式（Remote）',
       value: remote ? '开启' : '关闭',
       valueKind: 'bool',
-      description: '开 = 直连远程 DSH（配 Cloudflare cookie）；关 = 本地模式（可拉起 dsh web）',
+      description: '开 = 直连远程 DSH（配 token 认证）；关 = 本地模式（可拉起 dsh web）',
     })
-    if (remote) {
-      nodes.push({
-        kind: 'setting',
-        key: 'cloudflareCookie',
-        label: 'Cloudflare Cookie（CF_Authorization）',
-        value: this.textValue('cloudflareCookie') || '（未设置）',
-        valueKind: 'text',
-        description: '自动作为 Cookie 请求头发送给 /api 与事件流',
-      })
-    } else {
+    nodes.push({
+      kind: 'setting',
+      key: 'token',
+      label: 'DSH 启动 Token（dsh.token）',
+      value: this.textValue('token') ? '（已设置）' : '（未设置）',
+      valueKind: 'text',
+      description: 'dsh web 打印的 ?token= 值；扩展自动换取会话 cookie 认证 /api 与事件流',
+    })
+    if (!remote) {
       nodes.push({
         kind: 'setting',
         key: 'localServerPath',

@@ -19,36 +19,49 @@ describe('normalizeBaseUrl', () => {
 })
 
 describe('DshRpcClient.call', () => {
-  it('posts a client-request envelope and unwraps ok results', async () => {
+  it('posts a client-request envelope with { args } and unwraps ok results', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body))
       expect(body.type).toBe('client-request')
-      expect(body.method).toBe('session.list')
-      expect(body.payload).toEqual({})
-      expect(String(input)).toMatch(/\/api\/session\.list$/)
+      expect(body.method).toBe('session/list')
+      expect(body.payload).toEqual({ args: {} })
+      expect(String(input)).toMatch(/\/api\/session\/list$/)
       return jsonResponse({ type: 'server-response', rpcId: body.rpcId, result: { ok: true, value: { items: [] } } })
     })
     vi.stubGlobal('fetch', fetchMock)
     const client = new DshRpcClient('http://127.0.0.1:3080')
-    const value = await client.call<{ items: unknown[] }>('session.list', {})
+    const value = await client.call<{ items: unknown[] }>('session/list', {})
     expect(value.items).toEqual([])
   })
 
-  it('sends extra headers on every request (e.g. Cloudflare Access auth)', async () => {
+  it('sends extra headers on every request', async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const headers = init?.headers as Record<string, string>
-      expect(headers['CF-Access-Client-Id']).toBe('service-id')
-      expect(headers['CF-Access-Client-Secret']).toBe('service-secret')
+      expect(headers['X-Custom']).toBe('custom-value')
       expect(headers['content-type']).toBe('application/json')
       const body = JSON.parse(String(init?.body))
       return jsonResponse({ type: 'server-response', rpcId: body.rpcId, result: { ok: true, value: null } })
     })
     vi.stubGlobal('fetch', fetchMock)
     const client = new DshRpcClient('http://127.0.0.1:3080', {
-      'CF-Access-Client-Id': 'service-id',
-      'CF-Access-Client-Secret': 'service-secret',
+      extraHeaders: { 'X-Custom': 'custom-value' },
     })
-    await client.call('session.list', {})
+    await client.call('session/list', {})
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('attaches the auth cookie as a Cookie header when present', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = init?.headers as Record<string, string>
+      expect(headers['Cookie']).toMatch(/^dsh-auth-[a-f0-9]+=v1/)
+      const body = JSON.parse(String(init?.body))
+      return jsonResponse({ type: 'server-response', rpcId: body.rpcId, result: { ok: true, value: null } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new DshRpcClient('http://127.0.0.1:3080', {
+      authCookie: 'dsh-auth-abc=v1.sig',
+    })
+    await client.call('session/list', {})
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
@@ -60,7 +73,7 @@ describe('DshRpcClient.call', () => {
       }))
     vi.stubGlobal('fetch', fetchMock)
     const client = new DshRpcClient('http://127.0.0.1:3080')
-    await expect(client.call('session.list', {})).rejects.toThrow(/HTML/)
+    await expect(client.call('session/list', {})).rejects.toThrow(/HTML/)
   })
 
   it('throws RpcErrorResult on ok:false', async () => {
@@ -74,7 +87,7 @@ describe('DshRpcClient.call', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
     const client = new DshRpcClient('http://127.0.0.1:3080')
-    await expect(client.call('session.history', { sessionId: 'x' })).rejects.toMatchObject({
+    await expect(client.call('session/page', { address: { kind: 'session', sessionId: 'x' }, maxMessages: 40 })).rejects.toMatchObject({
       code: 'session-not-found',
       message: 'no such session',
     })
@@ -85,59 +98,43 @@ describe('DshRpcClient.call', () => {
       jsonResponse({ type: 'server-response', rpcId: 'other', result: { ok: true, value: null } }))
     vi.stubGlobal('fetch', fetchMock)
     const client = new DshRpcClient('http://127.0.0.1:3080')
-    await expect(client.call('session.list', {})).rejects.toThrow(/rpcId/)
+    await expect(client.call('session/list', {})).rejects.toThrow(/rpcId/)
   })
 
   it('throws DshTransportError on HTTP error and network failure', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('forbidden', { status: 403 })))
     const client = new DshRpcClient('http://127.0.0.1:3080')
-    await expect(client.call('session.list', {})).rejects.toBeInstanceOf(DshTransportError)
+    await expect(client.call('session/list', {})).rejects.toBeInstanceOf(DshTransportError)
 
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('fetch failed') }))
-    await expect(client.call('session.list', {})).rejects.toBeInstanceOf(DshTransportError)
+    await expect(client.call('session/list', {})).rejects.toBeInstanceOf(DshTransportError)
   })
 })
 
-describe('DshRpcClient.respond', () => {
-  it('posts a client-response echoing the rpcId', async () => {
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+describe('DshRpcClient.respondEvent', () => {
+  it('posts the $events/result envelope wrapped in { args }', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body))
-      expect(body.type).toBe('client-response')
-      expect(body.rpcId).toBe('rpc-1')
-      expect(body.result).toEqual({
-        ok: true,
-        value: { sessionId: 's1', approvalId: 'a1', outcome: 'allowed-once' },
+      expect(body.type).toBe('client-request')
+      expect(body.method).toBe('$events/result')
+      expect(body.payload).toEqual({
+        args: {
+          clientId: 'client-1',
+          eventId: 'evt-1',
+          outcome: { kind: 'result', value: { sessionId: 's1', approvalId: 'a1', outcome: 'allowed-once' } },
+        },
       })
-      return jsonResponse({ accepted: true })
+      expect(String(input)).toMatch(/\/api\/\$events\/result$/)
+      return jsonResponse({ type: 'server-response', rpcId: body.rpcId, result: { ok: true, value: { accepted: true } } })
     })
     vi.stubGlobal('fetch', fetchMock)
     const client = new DshRpcClient('http://127.0.0.1:3080')
-    await client.respond('rpc-1', { sessionId: 's1', approvalId: 'a1', outcome: 'allowed-once' })
+    await client.respondEvent({
+      clientId: 'client-1',
+      eventId: 'evt-1',
+      outcome: { kind: 'result', value: { sessionId: 's1', approvalId: 'a1', outcome: 'allowed-once' } },
+    })
     expect(fetchMock).toHaveBeenCalledTimes(1)
-  })
-
-  it('throws RpcErrorResult when the server rejects the receipt (issue #16: silent swallow)', async () => {
-    const fetchMock = vi.fn(async () => jsonResponse({ accepted: false, reason: 'not-pending' }))
-    vi.stubGlobal('fetch', fetchMock)
-    const client = new DshRpcClient('http://127.0.0.1:3080')
-    await expect(client.respond('rpc-1', { sessionId: 's1' })).rejects.toMatchObject({
-      code: 'RESPONSE_REJECTED',
-      message: expect.stringContaining('not-pending'),
-    })
-  })
-
-  it('throws RpcErrorResult for bad-response receipts', async () => {
-    const fetchMock = vi.fn(async () => jsonResponse({ accepted: false, reason: 'bad-response' }))
-    vi.stubGlobal('fetch', fetchMock)
-    const client = new DshRpcClient('http://127.0.0.1:3080')
-    await expect(client.respond('rpc-2', {})).rejects.toMatchObject({ code: 'RESPONSE_REJECTED' })
-  })
-
-  it('tolerates a missing/non-JSON receipt (older server) without throwing', async () => {
-    const fetchMock = vi.fn(async () => new Response('ok', { status: 200 }))
-    vi.stubGlobal('fetch', fetchMock)
-    const client = new DshRpcClient('http://127.0.0.1:3080')
-    await expect(client.respond('rpc-3', {})).resolves.toBeUndefined()
   })
 })
 
