@@ -71,6 +71,8 @@ export class DshConnection {
   private readonly token: string
   private authCookie = ''
   private authDone = false
+  /** 最近一次 token→cookie 交换失败原因（供 401 诊断信息展示）。 */
+  private authError = ''
 
   // Live workspace cache kept fresh by the workspace/follow stream.
   private workspaces: WorkspaceView[] = []
