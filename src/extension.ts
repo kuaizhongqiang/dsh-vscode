@@ -174,19 +174,47 @@ class DshExtension {
       }
       // DSH 无论本地还是远程都默认开启浏览器认证：有 token 就用它换取会话
       // cookie（token 为空时跳过，兼容未开启认证的本地服务）。
-      const token = this.resolveLaunchToken()
-      if (token.length > 0) {
+      let resolvedToken = this.resolveLaunchToken()
+      if (resolvedToken.length > 0) {
         const source = this.config.token.trim().length > 0 ? '设置 dsh.token' : `共享文件 ${launchTokenFilePath()}`
         this.output.appendLine(`[dsh-vscode] 使用启动 token 认证（来源：${source}）`)
       }
-      const connection = new DshConnection(url, {
-        reconnectIntervalMs: this.config.reconnectIntervalMs,
-        extraHeaders: this.config.extraHeaders,
-        token,
-      })
-      const off = connection.onEvent((event) => this.handleConnectionEvent(event))
-      this.disposables.push({ dispose: off })
-      await connection.connect()
+      // 连接；401 且 token 来自共享文件时，重读文件重试一次
+      // （launcher 重启 dsh 会写入新 token，文件可能比本次读取更新）。
+      let connection: DshConnection | undefined
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        const candidate = new DshConnection(url, {
+          reconnectIntervalMs: this.config.reconnectIntervalMs,
+          extraHeaders: this.config.extraHeaders,
+          token: resolvedToken,
+        })
+        const off = candidate.onEvent((event) => this.handleConnectionEvent(event))
+        this.disposables.push({ dispose: off })
+        try {
+          await candidate.connect()
+          connection = candidate
+          break
+        } catch (error) {
+          const message = errorMessage(error)
+          const canAutoRetry = attempt < 2
+            && message.includes('401')
+            && !this.config.remote
+            && this.config.token.trim().length === 0
+          if (!canAutoRetry) {
+            candidate.dispose()
+            throw error
+          }
+          const fresh = readLaunchToken()
+          if (fresh === undefined || fresh.token === resolvedToken) {
+            candidate.dispose()
+            throw error
+          }
+          this.output.appendLine(`[dsh-vscode] 401：共享 token 文件已更新（launcher 重启过 dsh），用新 token 重试`)
+          resolvedToken = fresh.token
+          candidate.dispose()
+        }
+      }
+      if (connection === undefined) throw new Error('连接 DSH 失败')
       this.connection = connection
       this.connected = true
       await vscode.commands.executeCommand('setContext', 'dsh.connected', true)
