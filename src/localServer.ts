@@ -165,8 +165,8 @@ export class LocalServerManager {
     child.on('exit', (code, signal) => {
       if (this.child !== child) return // 已被 stop() 替换
       this.child = undefined
-      // dsh 进程已退出：其 launch token 随之失效，清理共享 token 文件（pid 匹配才删）。
-      clearLaunchToken(child.pid)
+      // dsh 进程已退出：其 launch token 随之失效，清理共享 token 文件（source+pid 双匹配才删）。
+      clearLaunchToken('dsh-vscode', child.pid)
       if (this.state.status === 'starting') {
         this.appendLog(`进程提前退出：code=${code ?? ''} signal=${signal ?? ''}`)
         this.fail(`本地 dsh web 进程提前退出（exit=${code ?? signal ?? 'unknown'}），请检查日志`)
@@ -327,8 +327,8 @@ export class LocalServerManager {
     const child = this.child
     this.child = undefined
     if (child === undefined || child.pid === undefined) return
-    // 本进程拉起的 dsh 被停止：其 launch token 随之失效，清理共享文件（pid 匹配才删）。
-    clearLaunchToken(child.pid)
+    // 本进程拉起的 dsh 被停止：其 launch token 随之失效，清理共享文件（source+pid 双匹配才删）。
+    clearLaunchToken('dsh-vscode', child.pid)
     if (child.exitCode !== null || child.signalCode !== null) return // 已退出
     if (process.platform === 'win32') {
       // Windows 下杀整个进程树，避免残留子进程。
