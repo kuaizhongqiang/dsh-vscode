@@ -113,19 +113,30 @@ describe('clearLaunchToken', () => {
     })
   })
 
-  it('removes the file when the pid matches the writer', () => {
+  it('removes the file when source and pid match the writer', () => {
     expect(readLaunchToken()).toBeDefined()
-    clearLaunchToken(1001)
+    clearLaunchToken('dsh-vscode', 1001)
     expect(readLaunchToken()).toBeUndefined()
   })
 
-  it('keeps the file when the pid differs (another app owns it)', () => {
-    clearLaunchToken(9999)
+  it('keeps the file when the pid differs (another instance owns it)', () => {
+    clearLaunchToken('dsh-vscode', 9999)
     expect(readLaunchToken()?.token).toBe('keep_me')
   })
 
-  it('keeps the file when no pid is given', () => {
-    clearLaunchToken(undefined)
+  it('keeps the file when the source differs (launcher owns it)', () => {
+    clearLaunchToken('dsh-launcher', 1001)
+    expect(readLaunchToken()?.token).toBe('keep_me')
+  })
+
+  it('keeps the file when no pid is given and the record has one', () => {
+    clearLaunchToken('dsh-vscode')
     expect(readLaunchToken()).toBeDefined()
+  })
+
+  it('removes a legacy pid-less record owned by the same source', () => {
+    writeLaunchToken({ token: 'legacy', url: 'http://127.0.0.1:3080/?token=legacy', source: 'dsh-vscode' })
+    clearLaunchToken('dsh-vscode', 555)
+    expect(readLaunchToken()).toBeUndefined()
   })
 })
