@@ -13,6 +13,7 @@ import {
   clearLaunchToken,
   launchTokenFilePath,
   readLaunchToken,
+  redactTokenUrl,
   tokenFromUrl,
   tokenUrlFromLogs,
   writeLaunchToken,
@@ -58,6 +59,18 @@ describe('tokenFromUrl', () => {
   it('returns undefined for malformed input or missing token', () => {
     expect(tokenFromUrl('not a url')).toBeUndefined()
     expect(tokenFromUrl('http://127.0.0.1:3080/')).toBeUndefined()
+  })
+})
+
+describe('redactTokenUrl', () => {
+  it('redacts ?token= and &token= values without touching the rest', () => {
+    expect(redactTokenUrl('http://127.0.0.1:3080/?token=abc_XYZ-123')).toBe('http://127.0.0.1:3080/?token=***')
+    expect(redactTokenUrl('a=1&token=abc_XYZ-123&b=2')).toBe('a=1&token=***&b=2')
+    expect(redactTokenUrl('http://127.0.0.1:3080/')).toBe('http://127.0.0.1:3080/')
+  })
+
+  it('keeps an already-redacted token unchanged', () => {
+    expect(redactTokenUrl('http://127.0.0.1:3080/?token=***')).toBe('http://127.0.0.1:3080/?token=***')
   })
 })
 

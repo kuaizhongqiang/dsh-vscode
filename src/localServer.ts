@@ -10,7 +10,7 @@ import { existsSync, statSync } from 'node:fs'
 import { connect as netConnect } from 'node:net'
 import { join } from 'node:path'
 import { DshRpcClient, DshTransportError } from './client/rpc.ts'
-import { clearLaunchToken, launchTokenFilePath, tokenFromUrl, tokenUrlFromLogs, writeLaunchToken } from './launchToken.ts'
+import { clearLaunchToken, launchTokenFilePath, redactTokenUrl, tokenFromUrl, tokenUrlFromLogs, writeLaunchToken } from './launchToken.ts'
 
 export type LocalServiceStatus = 'stopped' | 'starting' | 'running' | 'failed'
 
@@ -78,6 +78,10 @@ export class LocalServerManager {
   private readonly listeners = new Set<() => void>()
   private readonly extraHeaders: () => Record<string, string>
   private disposed = false
+  /** 子进程原始输出的滚动缓冲（未脱敏，仅用于提取带 token 的启动 URL）。 */
+  private rawOutputTail = ''
+  /** 尚未以换行结束的半行日志（补齐后再脱敏输出，防 token 值被 chunk 截断）。 */
+  private pendingLogLine = ''
 
   constructor(extraHeaders: () => Record<string, string>) {
     this.extraHeaders = extraHeaders
@@ -156,8 +160,8 @@ export class LocalServerManager {
     this.child = child
     this.setState({ ...this.state, pid: child.pid })
 
-    child.stdout?.on('data', (chunk: Buffer) => this.appendLog(String(chunk)))
-    child.stderr?.on('data', (chunk: Buffer) => this.appendLog(String(chunk)))
+    child.stdout?.on('data', (chunk: Buffer) => this.handleChildOutput(String(chunk)))
+    child.stderr?.on('data', (chunk: Buffer) => this.handleChildOutput(String(chunk)))
     child.on('error', (error) => {
       this.appendLog(`启动失败：${error.message}`)
       this.fail(`无法启动 dsh 进程：${error.message}`)
@@ -257,7 +261,7 @@ export class LocalServerManager {
             reused: false,
           })
           this.appendLog(`本地服务就绪：${url}`)
-          // dsh 打印 token URL 与端口就绪几乎同时；等几秒确保日志里能取到，
+          // dsh 打印 token URL 与端口就绪几乎同时；等几秒确保原始输出里能取到，
           // 再写入共享 token 文件（供 dsh-launcher 等应用读取，避免手动抄 token）。
           const tokenUrl = await this.waitForTokenFromLogs(3_000)
           if (tokenUrl !== undefined) {
@@ -299,14 +303,32 @@ export class LocalServerManager {
   }
 
   /**
-   * 等待子进程日志出现带 token 的 URL（dsh 打印 token 行与端口就绪之间有
+   * 处理 dsh 子进程的一截输出：
+   * 1. 追加到原始滚动缓冲（供 token URL 提取，避免日志脱敏后无法取到 token）；
+   * 2. 按完整行脱敏后进日志缓冲，避免 token 值被 chunk 边界截断泄漏明文
+   *    （红线：日志与 UI 中一律脱敏为 token=***）。
+   */
+  private handleChildOutput(text: string): void {
+    this.rawOutputTail = (this.rawOutputTail + text).slice(-256 * 1024)
+    const pending = (this.pendingLogLine + text).split('\n')
+    this.pendingLogLine = pending.pop() ?? ''
+    for (const line of pending) this.appendLog(redactTokenUrl(line))
+    // 无换行的极长输出兜底：强制处理并丢弃积压，避免内存增长。
+    if (this.pendingLogLine.length > 64 * 1024) {
+      this.appendLog(redactTokenUrl(this.pendingLogLine))
+      this.pendingLogLine = ''
+    }
+  }
+
+  /**
+   * 等待子进程原始输出出现带 token 的 URL（dsh 打印 token 行与端口就绪之间有
    * 毫秒级间隔，直接读可能拿不到）。
    */
   private async waitForTokenFromLogs(timeoutMs: number): Promise<string | undefined> {
     const deadline = Date.now() + timeoutMs
     let last: string | undefined
     while (Date.now() < deadline) {
-      last = tokenUrlFromLogs(this.state.logs.join('\n'))
+      last = tokenUrlFromLogs(this.rawOutputTail)
       if (last !== undefined) return last
       await sleep(150)
     }

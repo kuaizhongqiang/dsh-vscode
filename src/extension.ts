@@ -202,6 +202,7 @@ class DshExtension {
           const canAutoRetry = attempt < 2
             && message.includes('401')
             && !this.config.remote
+            && this.config.launchTokenFollow
           if (!canAutoRetry) {
             candidate.dispose()
             throw error
@@ -264,6 +265,7 @@ class DshExtension {
     const configured = this.config.token.trim()
     if (configured.length > 0) return configured
     if (this.config.remote) return ''
+    if (!this.config.launchTokenFollow) return ''
     return readLaunchToken()?.token ?? ''
   }
 

@@ -108,6 +108,11 @@
           "default": "",
           "description": "本地模式下 dsh 安装 / 启动目录（即运行 `dsh web` 时所在的目录，应包含 dsh 启动器 dsh.cmd / dsh / dsh-launcher.exe）。样例：Windows `D:\\dsh`，macOS/Linux `~/dsh`。配置后 VSCode 启动（或点击连接）会自动拉起 `dsh web`（cwd=该目录）并轮询就绪后连接，退出时自动终止服务进程；设置时会校验路径存在、是目录且含启动器。"
         },
+        "dsh.launchTokenFollow": {
+          "type": "boolean",
+          "default": true,
+          "description": "本地模式且 dsh.token 为空时，读取 %DSH_HOME%\\launch-token.json 实现 token 认证跟随（launcher 与本扩展谁拉起 dsh 谁写该文件）；dsh.token 显式配置时仍以静态配置优先。关闭后与旧版行为一致（token 只来自静态配置，401 也不再自动切到共享文件 token）。"
+        },
         "dsh.promptMode": {
           "type": "string",
           "enum": [

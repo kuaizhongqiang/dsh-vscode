@@ -26,6 +26,11 @@ import { dshHome } from './dshHome.ts'
 export const LAUNCH_TOKEN_FILE = 'launch-token.json'
 export const LAUNCH_TOKEN_VERSION = 1
 
+/** 日志脱敏：把文本里 `?token=…` / `&token=…` 的 token 值替换为 `***`（日志/UI 必用）。 */
+export function redactTokenUrl(text: string): string {
+  return text.replace(/([?&]token=)[A-Za-z0-9_-]+/g, '$1***')
+}
+
 export type LaunchTokenSource = 'dsh-vscode' | 'dsh-launcher'
 
 export interface LaunchTokenRecord {

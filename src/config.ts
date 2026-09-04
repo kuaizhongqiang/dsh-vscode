@@ -15,6 +15,7 @@ const TOKEN = 'dsh.token'
 const LOCAL_SERVER_PATH = 'dsh.localServerPath'
 const PROMPT_MODE = 'dsh.promptMode'
 const PRICING = 'dsh.pricing'
+const LAUNCH_TOKEN_FOLLOW = 'dsh.launchTokenFollow'
 
 export type PromptMode = 'steer' | 'queue'
 
@@ -68,6 +69,8 @@ export interface DshConfig {
   token: string
   /** Local 模式下 dsh 安装/启动目录；配置后扩展可自动拉起 `dsh web`（cwd=该路径）并连接。 */
   localServerPath: string
+  /** Local 模式 + dsh.token 为空时，跟随共享 launch-token.json 认证（默认开，可关）。 */
+  launchTokenFollow: boolean
   /** 发送消息的模式：'steer' = 插话（立即处理，默认，与 DSH Web 一致），'queue' = 排队（等当前回合结束）。 */
   promptMode: PromptMode
   /** 按模型 id 的每百万 token 单价表（¥，用于用量栏费用估算）。 */
@@ -95,6 +98,7 @@ export function readConfig(): DshConfig {
     remote: config.get<boolean>(key(REMOTE), false),
     token,
     localServerPath: config.get<string>(key(LOCAL_SERVER_PATH), ''),
+    launchTokenFollow: config.get<boolean>(key(LAUNCH_TOKEN_FOLLOW), true),
     promptMode: readPromptMode(config),
     pricing: readPricing(config),
   }
